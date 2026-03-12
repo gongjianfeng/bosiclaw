@@ -43,7 +43,6 @@ export function Sidebar({ currentPage, onNavigate, serviceStatus }: SidebarProps
           </div>
           <div>
             <h1 className="text-sm font-semibold text-white">BosiClaw</h1>
-            <p className="text-xs text-gray-500">Manager</p>
           </div>
         </div>
       </div>

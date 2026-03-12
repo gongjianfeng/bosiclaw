@@ -21,8 +21,10 @@ import {
   XCircle,
   Pencil,
 } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-shell';
 import clsx from 'clsx';
 import { aiLogger } from '../../lib/logger';
+import { SupportModal } from '../SupportModal';
 
 // ============ 类型定义 ============
 
@@ -849,6 +851,7 @@ export function AIConfig() {
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AITestResult | null>(null);
+  const [showSupport, setShowSupport] = useState(false);
 
   const handleEditProvider = (provider: ConfiguredProvider) => {
     setEditingProvider(provider);
@@ -957,6 +960,23 @@ export function AIConfig() {
               </h2>
               <p className="text-sm text-gray-500 mt-1">
                 管理 OpenClaw 使用的 AI Provider 和模型
+              </p>
+              <p className="text-sm text-gray-500 mt-1">
+                unified支持模型:{' '}
+                <span
+                  className="text-claw-400 hover:underline cursor-pointer"
+                  onClick={() => open('https://unifiedapi.cloud/pricing')}
+                >
+                  https://unifiedapi.cloud/pricing
+                </span>
+              </p>
+              <p className="text-sm mt-1">
+                <span
+                  className="text-claw-400 hover:underline cursor-pointer"
+                  onClick={() => setShowSupport(true)}
+                >
+                  联系我们获取模型秘钥
+                </span>
               </p>
             </div>
             <button
@@ -1142,6 +1162,8 @@ export function AIConfig() {
           />
         )}
       </AnimatePresence>
+
+      <SupportModal isOpen={showSupport} onClose={() => setShowSupport(false)} />
     </div>
   );
 }
