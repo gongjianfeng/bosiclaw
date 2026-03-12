@@ -403,7 +403,7 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
 
         {/* 版本信息 */}
         <p className="text-center text-dark-500 text-xs mt-6">
-          BosiClaw v0.9.1
+          BosiClaw v0.9.2
         </p>
       </motion.div>
     </div>

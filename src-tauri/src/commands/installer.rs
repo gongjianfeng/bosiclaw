@@ -1,3 +1,5 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use crate::utils::{platform, shell};
 use serde::{Deserialize, Serialize};
 use tauri::command;
@@ -87,6 +89,129 @@ if (-not $env:OPENCLAW_NODE_DOWNLOAD_URL) {{ $env:OPENCLAW_NODE_DOWNLOAD_URL = "
         dist_mirror = DEFAULT_NODE_DIST_MIRROR,
         download_url = DEFAULT_NODE_DOWNLOAD_URL,
     )
+}
+
+fn windows_command_bootstrap_script() -> String {
+    r#"
+function Add-PathEntryIfExists {
+    param([string]$PathEntry)
+    if ([string]::IsNullOrWhiteSpace($PathEntry)) { return }
+    if (-not (Test-Path $PathEntry)) { return }
+
+    $pathEntries = @($env:Path -split ';' | Where-Object { $_ })
+    if ($pathEntries -notcontains $PathEntry) {
+        $env:Path = "$PathEntry;$env:Path"
+    }
+}
+
+function Resolve-FirstCommandPath {
+    param(
+        [Parameter(Mandatory=$true)][string]$CommandName,
+        [string[]]$CandidatePaths = @()
+    )
+
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) {
+        if ($command.Source) { return $command.Source }
+        if ($command.Path) { return $command.Path }
+        if ($command.Definition) { return $command.Definition }
+    }
+
+    foreach ($candidate in $CandidatePaths) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Assert-LastExitCode {
+    param([string]$Message)
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Message (exit code: $LASTEXITCODE)"
+    }
+}
+
+$pathEntries = @(
+    "$env:APPDATA\npm",
+    "$env:USERPROFILE\AppData\Roaming\npm",
+    "$env:LOCALAPPDATA\fnm",
+    "$env:LOCALAPPDATA\fnm_multishells",
+    "$env:USERPROFILE\.fnm",
+    "C:\nvm4w\nodejs",
+    "$env:ProgramFiles\nodejs",
+    "${env:ProgramFiles(x86)}\nodejs",
+    "$env:ProgramFiles\Git\cmd",
+    "$env:ProgramFiles\Git\bin",
+    "${env:ProgramFiles(x86)}\Git\cmd",
+    "${env:ProgramFiles(x86)}\Git\bin",
+    "$env:USERPROFILE\scoop\shims"
+)
+foreach ($pathEntry in $pathEntries) {
+    Add-PathEntryIfExists $pathEntry
+}
+"#
+    .to_string()
+}
+
+fn windows_git_prerequisite_script() -> String {
+    r#"
+$gitCmd = Resolve-FirstCommandPath -CommandName 'git' -CandidatePaths @(
+    "$env:ProgramFiles\Git\cmd\git.exe",
+    "$env:ProgramFiles\Git\bin\git.exe",
+    "${env:ProgramFiles(x86)}\Git\cmd\git.exe",
+    "${env:ProgramFiles(x86)}\Git\bin\git.exe",
+    "$env:USERPROFILE\scoop\shims\git.exe"
+)
+if (-not $gitCmd) {
+    throw "未检测到 Git。请先安装 Git for Windows，并确保 git.exe 可用后再重试。下载地址: https://git-scm.com/download/win"
+}
+Add-PathEntryIfExists (Split-Path -Parent $gitCmd)
+"#
+    .to_string()
+}
+
+fn windows_openclaw_resolver_script() -> String {
+    r#"
+$openclawCmd = Resolve-FirstCommandPath -CommandName 'openclaw' -CandidatePaths @(
+    "$env:APPDATA\npm\openclaw.cmd",
+    "$env:USERPROFILE\AppData\Roaming\npm\openclaw.cmd",
+    "$env:ProgramFiles\nodejs\openclaw.cmd",
+    "${env:ProgramFiles(x86)}\nodejs\openclaw.cmd",
+    "C:\nvm4w\nodejs\openclaw.cmd"
+)
+if ($openclawCmd) {
+    Add-PathEntryIfExists (Split-Path -Parent $openclawCmd)
+}
+"#
+    .to_string()
+}
+
+fn encode_powershell_script(script: &str) -> String {
+    let utf16le_bytes: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    BASE64_STANDARD.encode(utf16le_bytes)
+}
+
+fn windows_powershell_start_command(encoded_command: &str, run_as_admin: bool) -> String {
+    let verb = if run_as_admin { " -Verb RunAs" } else { "" };
+
+    format!(
+        "Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoExit','-ExecutionPolicy','Bypass','-EncodedCommand','{encoded_command}'{verb}",
+        encoded_command = encoded_command,
+        verb = verb,
+    )
+}
+
+fn open_windows_powershell_terminal(script_content: &str, run_as_admin: bool) -> Result<(), String> {
+    let encoded_command = encode_powershell_script(script_content);
+    let launch_script = windows_powershell_start_command(&encoded_command, run_as_admin);
+    shell::run_powershell_output(&launch_script)
+        .map(|_| ())
+        .map_err(|e| format!("启动终端失败: {}", e))
 }
 
 fn unix_homebrew_mirror_exports() -> String {
@@ -616,6 +741,8 @@ async fn install_openclaw_windows() -> Result<InstallResult, String> {
 $ErrorActionPreference = 'Stop'
 "#,
         &windows_npm_mirror_exports(),
+        &windows_command_bootstrap_script(),
+        &windows_git_prerequisite_script(),
         r#"
 
 # 检查 Node.js
@@ -626,15 +753,22 @@ if (-not $nodeVersion) {
 }
 
 Write-Host "使用 npm 安装 OpenClaw..."
-npm install -g openclaw@latest --unsafe-perm --registry $env:OPENCLAW_NPM_REGISTRY
+& npm install -g openclaw@latest --unsafe-perm "--registry=$env:OPENCLAW_NPM_REGISTRY"
+Assert-LastExitCode "OpenClaw 安装失败"
+"#,
+        &windows_openclaw_resolver_script(),
+        r#"
 
 # 验证安装
-$openclawVersion = openclaw --version 2>$null
+$openclawVersion = if ($openclawCmd) { & $openclawCmd --version 2>$null } else { $null }
+if ($openclawCmd) {
+    Assert-LastExitCode "OpenClaw 版本检查失败"
+}
 if ($openclawVersion) {
     Write-Host "OpenClaw 安装成功: $openclawVersion"
     exit 0
 } else {
-    Write-Host "OpenClaw 安装失败"
+    Write-Host "OpenClaw 安装完成后未找到可执行文件，请重启终端后重试"
     exit 1
 }
 "#,
@@ -789,23 +923,24 @@ pub async fn open_install_terminal(install_type: String) -> Result<String, Strin
 /// 打开终端安装 Node.js
 async fn open_nodejs_install_terminal() -> Result<String, String> {
     if platform::is_windows() {
-        // Windows: 打开 PowerShell 执行安装
-        let script = [
+        let script_content = [
             r#"
-Start-Process powershell -ArgumentList '-NoExit', '-Command', '
+$ErrorActionPreference = 'Stop'
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "    Node.js 安装向导" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 "#,
             &windows_node_mirror_exports(),
+            &windows_command_bootstrap_script(),
             r#"
 
 # 检查 winget
 $hasWinget = Get-Command winget -ErrorAction SilentlyContinue
 if ($hasWinget) {
     Write-Host "正在使用 winget 安装 Node.js 22..." -ForegroundColor Yellow
-    winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+    & winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+    Assert-LastExitCode "Node.js 安装失败"
 } else {
     Write-Host "请优先从以下国内镜像下载 Node.js:" -ForegroundColor Yellow
     Write-Host $env:OPENCLAW_NODE_DOWNLOAD_URL -ForegroundColor Green
@@ -816,12 +951,11 @@ if ($hasWinget) {
 Write-Host ""
 Write-Host "安装完成后请重启 OpenClaw Manager" -ForegroundColor Green
 Write-Host ""
-Read-Host "按回车键关闭此窗口"
-' -Verb RunAs
+        Read-Host "按回车键关闭此窗口"
 "#,
         ]
         .concat();
-        shell::run_powershell_output(&script)?;
+        open_windows_powershell_terminal(&script_content, true)?;
         Ok("已打开安装终端".to_string())
     } else if platform::is_macos() {
         // macOS: 打开 Terminal.app
@@ -861,34 +995,46 @@ read -p "按回车键关闭此窗口..."
 /// 打开终端安装 OpenClaw
 async fn open_openclaw_install_terminal() -> Result<String, String> {
     if platform::is_windows() {
-        let script = [
+        let script_content = [
             r#"
-Start-Process powershell -ArgumentList '-NoExit', '-Command', '
+$ErrorActionPreference = 'Stop'
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "    OpenClaw 安装向导" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 "#,
             &windows_npm_mirror_exports(),
+            &windows_command_bootstrap_script(),
+            &windows_git_prerequisite_script(),
             r#"
 
 Write-Host "正在安装 OpenClaw..." -ForegroundColor Yellow
-npm install -g openclaw@latest --registry $env:OPENCLAW_NPM_REGISTRY
+& npm install -g openclaw@latest --unsafe-perm "--registry=$env:OPENCLAW_NPM_REGISTRY"
+Assert-LastExitCode "OpenClaw 安装失败"
+"#,
+            &windows_openclaw_resolver_script(),
+            r#"
+
+if (-not $openclawCmd) {
+    throw "OpenClaw 安装完成后未找到可执行文件。请重启终端后再试，或检查 %APPDATA%\npm 是否在 PATH 中。"
+}
 
 Write-Host ""
 Write-Host "初始化配置..."
-openclaw config set gateway.mode local
+& $openclawCmd config set gateway.mode local
+Assert-LastExitCode "OpenClaw 初始化配置失败"
 
 Write-Host ""
 Write-Host "安装完成！" -ForegroundColor Green
-openclaw --version
+$openclawVersion = & $openclawCmd --version
+Assert-LastExitCode "OpenClaw 版本检查失败"
+Write-Host $openclawVersion
 Write-Host ""
-Read-Host "按回车键关闭此窗口"
-'
+        Read-Host "按回车键关闭此窗口"
 "#,
         ]
         .concat();
-        shell::run_powershell_output(&script)?;
+        open_windows_powershell_terminal(&script_content, false)?;
         Ok("已打开安装终端".to_string())
     } else if platform::is_macos() {
         let script_content = format!(r#"#!/bin/bash
@@ -1339,5 +1485,54 @@ mod tests {
         assert!(script.contains(DEFAULT_HOMEBREW_BOTTLE_DOMAIN));
         assert!(script.contains("brew install node@22"));
         assert!(script.contains("回退官方 Homebrew 源重试"));
+    }
+
+    #[test]
+    fn encode_powershell_script_uses_utf16le_base64() {
+        let script = "Write-Host \"你好\"";
+        let encoded = encode_powershell_script(script);
+        let decoded = BASE64_STANDARD.decode(encoded).unwrap();
+        let utf16: Vec<u16> = decoded
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        assert_eq!(String::from_utf16(&utf16).unwrap(), script);
+    }
+
+    #[test]
+    fn windows_start_command_uses_encoded_command_and_runas() {
+        let command = windows_powershell_start_command("QUJDRA==", true);
+        assert!(command.contains("Start-Process -FilePath 'powershell.exe'"));
+        assert!(command.contains("'-EncodedCommand','QUJDRA=='"));
+        assert!(command.contains("-Verb RunAs"));
+    }
+
+    #[test]
+    fn windows_start_command_without_runas_keeps_encoded_payload() {
+        let command = windows_powershell_start_command("LQBuAG8AZABlAA==", false);
+        assert!(command.contains("'-EncodedCommand','LQBuAG8AZABlAA=='"));
+        assert!(!command.contains("-Verb RunAs"));
+    }
+
+    #[test]
+    fn windows_command_bootstrap_includes_git_and_npm_paths() {
+        let script = windows_command_bootstrap_script();
+        assert!(script.contains("$env:APPDATA\\npm"));
+        assert!(script.contains("$env:ProgramFiles\\Git\\cmd"));
+        assert!(script.contains("function Assert-LastExitCode"));
+    }
+
+    #[test]
+    fn windows_git_prerequisite_script_surfaces_git_download_message() {
+        let script = windows_git_prerequisite_script();
+        assert!(script.contains("Resolve-FirstCommandPath -CommandName 'git'"));
+        assert!(script.contains("https://git-scm.com/download/win"));
+    }
+
+    #[test]
+    fn windows_openclaw_resolver_checks_common_global_install_locations() {
+        let script = windows_openclaw_resolver_script();
+        assert!(script.contains("$env:APPDATA\\npm\\openclaw.cmd"));
+        assert!(script.contains("C:\\nvm4w\\nodejs\\openclaw.cmd"));
     }
 }

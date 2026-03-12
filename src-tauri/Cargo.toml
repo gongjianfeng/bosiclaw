@@ -1,6 +1,6 @@
 [package]
 name = "bosiclaw"
-version = "0.9.1"
+version = "0.9.2"
 description = "BosiClaw 跨平台管理工具"
 authors = ["BosiClaw Team"]
 edition = "2021"
@@ -9,6 +9,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22.1"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"

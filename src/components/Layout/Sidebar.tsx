@@ -42,7 +42,7 @@ export function Sidebar({ currentPage, onNavigate, serviceStatus }: SidebarProps
             <img src="/claw.svg" alt="BosiClaw" className="w-8 h-8" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-white">BosiClaw <span className="text-[10px] font-normal text-gray-500">v0.9.1</span></h1>
+            <h1 className="text-sm font-semibold text-white">BosiClaw <span className="text-[10px] font-normal text-gray-500">v0.9.2</span></h1>
           </div>
         </div>
       </div>
