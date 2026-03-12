@@ -20,25 +20,35 @@ fn get_version_file() -> PathBuf {
 }
 
 /// 获取 bundled Node.js sidecar 的路径
-/// Tauri sidecar 在打包后位于可执行文件同目录（macOS 为 .app/Contents/MacOS/）
+/// Tauri sidecar 运行时文件名为 node-{target-triple}[.exe]，位于可执行文件同目录
 pub fn get_bundled_node_path() -> Option<PathBuf> {
     let exe_path = std::env::current_exe().ok()?;
     let exe_dir = exe_path.parent()?;
 
+    // Tauri sidecar 命名规则: node-{TAURI_ENV_TARGET_TRIPLE}[.exe]
+    let target_triple = env!("TAURI_ENV_TARGET_TRIPLE");
     let node_name = if platform::is_windows() {
-        "node.exe"
+        format!("node-{}.exe", target_triple)
     } else {
-        "node"
+        format!("node-{}", target_triple)
     };
 
-    let node_path = exe_dir.join(node_name);
+    let node_path = exe_dir.join(&node_name);
     if node_path.exists() {
         info!("[Bundled] 找到内置 Node.js: {}", node_path.display());
-        Some(node_path)
-    } else {
-        debug!("[Bundled] 未找到内置 Node.js: {}", node_path.display());
-        None
+        return Some(node_path);
     }
+    debug!("[Bundled] 未找到内置 Node.js: {}", node_path.display());
+
+    // 开发模式回退：尝试不带 target triple 的名称
+    let fallback_name = if platform::is_windows() { "node.exe" } else { "node" };
+    let fallback_path = exe_dir.join(fallback_name);
+    if fallback_path.exists() {
+        info!("[Bundled] 找到内置 Node.js (fallback): {}", fallback_path.display());
+        return Some(fallback_path);
+    }
+
+    None
 }
 
 /// 获取 bundled Node.js 路径（字符串形式，供 shell.rs 使用）
@@ -68,11 +78,23 @@ pub fn ensure_openclaw_extracted(resource_dir: &Path) -> Result<PathBuf, String>
     let version_file = get_version_file();
     let mjs_path = openclaw_dir.join("openclaw.mjs");
 
-    let tgz_path = resource_dir.join("openclaw-runtime.tgz");
-    if !tgz_path.exists() {
-        debug!("[Bundled] 未找到 bundled openclaw-runtime.tgz: {}", tgz_path.display());
-        return Err("未找到内置 openclaw-runtime.tgz".to_string());
-    }
+    // Tauri 打包时保留 resources/ 子目录结构，尝试多个可能的路径
+    let tgz_candidates = [
+        resource_dir.join("resources").join("openclaw-runtime.tgz"),
+        resource_dir.join("openclaw-runtime.tgz"),
+    ];
+
+    let tgz_path = tgz_candidates.iter().find(|p| p.exists());
+    let tgz_path = match tgz_path {
+        Some(p) => {
+            info!("[Bundled] 找到 openclaw-runtime.tgz: {}", p.display());
+            p.clone()
+        }
+        None => {
+            debug!("[Bundled] 未找到 bundled openclaw-runtime.tgz, 搜索路径: {:?}", tgz_candidates);
+            return Err("未找到内置 openclaw-runtime.tgz".to_string());
+        }
+    };
 
     // 读取 tgz 中的版本号
     let bundled_version = read_version_from_tgz(&tgz_path)
