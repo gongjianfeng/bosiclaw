@@ -118,7 +118,7 @@ export function Header({ currentPage }: HeaderProps) {
                 {/* 邮箱 */}
                 <div className="flex items-center justify-center gap-2 text-sm text-gray-400">
                   <Mail size={14} />
-                  <span>marketing@bosicloud.com</span>
+                  <span>bosiclawservice@bosicloud.com</span>
                 </div>
               </div>
             </motion.div>
