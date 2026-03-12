@@ -3,6 +3,7 @@ use std::io;
 use std::collections::HashMap;
 use crate::utils::platform;
 use crate::utils::file;
+use crate::utils::bundled;
 use log::{info, debug, warn};
 
 #[cfg(windows)]
@@ -236,8 +237,15 @@ pub fn spawn_background(script: &str) -> io::Result<()> {
 }
 
 /// 获取 openclaw 可执行文件路径
-/// 检测多个可能的安装路径，因为 GUI 应用不继承用户 shell 的 PATH
+/// 优先使用 bundled runtime（~/.openclaw/runtime/openclaw/openclaw.mjs）
+/// 回退到系统安装的 openclaw
 pub fn get_openclaw_path() -> Option<String> {
+    // 优先检查 bundled runtime
+    if let Some(mjs_path) = bundled::get_runtime_openclaw_path() {
+        info!("[Shell] 使用 bundled openclaw: {}", mjs_path);
+        return Some(mjs_path);
+    }
+
     // Windows: 检查常见的 npm 全局安装路径
     if platform::is_windows() {
         let possible_paths = get_windows_openclaw_paths();
@@ -364,7 +372,26 @@ pub fn run_openclaw(args: &[&str]) -> Result<String, String> {
     let extended_path = get_extended_path();
     debug!("[Shell] 扩展 PATH: {}", extended_path);
     
-    let output = if openclaw_path.ends_with(".cmd") {
+    let output = if openclaw_path.ends_with(".mjs") {
+        // Bundled runtime: 使用内置 node 执行 openclaw.mjs
+        let node_path = bundled::get_bundled_node_path_str()
+            .or_else(|| {
+                // 回退到系统 node
+                if command_exists("node") { Some("node".to_string()) } else { None }
+            })
+            .ok_or_else(|| "找不到 Node.js，无法执行 bundled openclaw".to_string())?;
+        debug!("[Shell] 使用 node 执行 mjs: {} {}", node_path, openclaw_path);
+        let mut cmd = Command::new(&node_path);
+        cmd.arg(&openclaw_path)
+            .args(args)
+            .env("OPENCLAW_GATEWAY_TOKEN", DEFAULT_GATEWAY_TOKEN)
+            .env("PATH", &extended_path);
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        cmd.output()
+    } else if openclaw_path.ends_with(".cmd") {
         // Windows: .cmd 文件需要通过 cmd /c 执行
         let mut cmd_args = vec!["/c", &openclaw_path];
         cmd_args.extend(args);
@@ -372,20 +399,20 @@ pub fn run_openclaw(args: &[&str]) -> Result<String, String> {
         cmd.args(&cmd_args)
             .env("OPENCLAW_GATEWAY_TOKEN", DEFAULT_GATEWAY_TOKEN)
             .env("PATH", &extended_path);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
+
         cmd.output()
     } else {
         let mut cmd = Command::new(&openclaw_path);
         cmd.args(args)
             .env("OPENCLAW_GATEWAY_TOKEN", DEFAULT_GATEWAY_TOKEN)
             .env("PATH", &extended_path);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
+
         cmd.output()
     };
     
@@ -469,8 +496,23 @@ pub fn spawn_openclaw_gateway() -> io::Result<()> {
     info!("[Shell] 扩展 PATH: {}", extended_path);
     
     // Windows 上 .cmd 文件需要通过 cmd /c 来执行
+    // .mjs 文件需要通过 node 来执行
     // 设置环境变量 OPENCLAW_GATEWAY_TOKEN，这样所有子命令都能自动使用
-    let mut cmd = if openclaw_path.ends_with(".cmd") {
+    let mut cmd = if openclaw_path.ends_with(".mjs") {
+        // Bundled runtime: 使用内置 node 执行 openclaw.mjs
+        let node_path = bundled::get_bundled_node_path_str()
+            .or_else(|| {
+                if command_exists("node") { Some("node".to_string()) } else { None }
+            })
+            .ok_or_else(|| io::Error::new(
+                io::ErrorKind::NotFound,
+                "找不到 Node.js，无法执行 bundled openclaw"
+            ))?;
+        info!("[Shell] Bundled 模式: 使用 {} 执行 {}", node_path, openclaw_path);
+        let mut c = Command::new(&node_path);
+        c.args([&openclaw_path as &str, "gateway", "--port", "18789"]);
+        c
+    } else if openclaw_path.ends_with(".cmd") {
         info!("[Shell] Windows 模式: 使用 cmd /c 执行");
         let mut c = Command::new("cmd");
         c.args(["/c", &openclaw_path, "gateway", "--port", "18789"]);

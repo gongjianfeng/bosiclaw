@@ -1,6 +1,7 @@
-use crate::utils::{platform, shell};
+use crate::utils::{platform, shell, bundled};
 use serde::{Deserialize, Serialize};
 use tauri::command;
+use tauri::Manager;
 use log::{info, warn, error, debug};
 
 /// 环境检查结果
@@ -42,36 +43,57 @@ pub struct InstallResult {
 }
 
 /// 检查环境状态
+/// 优先尝试使用 bundled runtime（内置 Node.js + openclaw）
 #[command]
-pub async fn check_environment() -> Result<EnvironmentStatus, String> {
+pub async fn check_environment(app: tauri::AppHandle) -> Result<EnvironmentStatus, String> {
     info!("[环境检查] 开始检查系统环境...");
-    
+
     let os = platform::get_os();
     info!("[环境检查] 操作系统: {}", os);
-    
-    // 检查 Node.js
+
+    // 尝试解压 bundled runtime
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        info!("[环境检查] 尝试解压 bundled runtime, resource_dir={}", resource_dir.display());
+        match bundled::ensure_openclaw_extracted(&resource_dir) {
+            Ok(mjs_path) => {
+                info!("[环境检查] ✓ Bundled runtime 就绪: {}", mjs_path.display());
+            }
+            Err(e) => {
+                debug!("[环境检查] Bundled runtime 不可用: {}", e);
+            }
+        }
+    }
+
+    // 检查 Node.js（优先检查 bundled node）
     info!("[环境检查] 检查 Node.js...");
     let node_version = get_node_version();
-    let node_installed = node_version.is_some();
-    let node_version_ok = check_node_version_requirement(&node_version);
-    info!("[环境检查] Node.js: installed={}, version={:?}, version_ok={}", 
-        node_installed, node_version, node_version_ok);
-    
-    // 检查 OpenClaw
+    let bundled_node = bundled::get_bundled_node_path().is_some();
+    let node_installed = node_version.is_some() || bundled_node;
+    let node_version_ok = if bundled_node && node_version.is_none() {
+        // bundled node 存在但无法获取版本（首次启动），假定版本满足要求
+        true
+    } else {
+        check_node_version_requirement(&node_version)
+    };
+    info!("[环境检查] Node.js: installed={}, bundled={}, version={:?}, version_ok={}",
+        node_installed, bundled_node, node_version, node_version_ok);
+
+    // 检查 OpenClaw（get_openclaw_path 已优先检查 bundled runtime）
     info!("[环境检查] 检查 OpenClaw...");
     let openclaw_version = get_openclaw_version();
-    let openclaw_installed = openclaw_version.is_some();
-    info!("[环境检查] OpenClaw: installed={}, version={:?}", 
-        openclaw_installed, openclaw_version);
-    
+    let bundled_openclaw = bundled::is_runtime_ready();
+    let openclaw_installed = openclaw_version.is_some() || bundled_openclaw;
+    info!("[环境检查] OpenClaw: installed={}, bundled={}, version={:?}",
+        openclaw_installed, bundled_openclaw, openclaw_version);
+
     // 检查配置目录
     let config_dir = platform::get_config_dir();
     let config_dir_exists = std::path::Path::new(&config_dir).exists();
     info!("[环境检查] 配置目录: {}, exists={}", config_dir, config_dir_exists);
-    
+
     let ready = node_installed && node_version_ok && openclaw_installed;
     info!("[环境检查] 环境就绪状态: ready={}", ready);
-    
+
     Ok(EnvironmentStatus {
         node_installed,
         node_version,

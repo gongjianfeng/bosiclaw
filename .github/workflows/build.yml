@@ -14,6 +14,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  NODE_VERSION: "22.22.1"
 
 jobs:
   build:
@@ -21,20 +22,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS - Universal (Intel + Apple Silicon)
+          # macOS - Apple Silicon (arm64)
           - platform: macos-latest
-            target: universal-apple-darwin
-            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            label: macOS
+            target: aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
+            node_arch: arm64
+            node_platform: darwin
+            koffi_keep: darwin_arm64
+            label: macOS-arm64
+          # macOS - Intel (x64)
+          - platform: macos-13
+            target: x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
+            node_arch: x64
+            node_platform: darwin
+            koffi_keep: darwin_x64
+            label: macOS-x64
           # Windows
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
+            node_arch: x64
+            node_platform: win
+            koffi_keep: win32_x64
             label: Windows
           # Linux
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rust_targets: x86_64-unknown-linux-gnu
+            node_arch: x64
+            node_platform: linux
+            koffi_keep: linux_x64
             label: Linux
 
     runs-on: ${{ matrix.platform }}
@@ -80,30 +98,116 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # ── 准备 bundled 依赖 ────────────────────────────────
+      - name: Get openclaw version for cache key
+        id: openclaw-version
+        shell: bash
+        run: |
+          VERSION=$(npm view openclaw version 2>/dev/null || echo "unknown")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "openclaw version: $VERSION"
+
+      - name: Cache bundled deps
+        id: cache-bundled
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/binaries
+            src-tauri/resources
+          key: bundled-${{ matrix.target }}-node${{ env.NODE_VERSION }}-openclaw-${{ steps.openclaw-version.outputs.version }}
+
+      - name: Prepare bundled Node.js binary
+        if: steps.cache-bundled.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+
+          if [ "${{ matrix.node_platform }}" = "win" ]; then
+            echo "下载 Node.js for Windows x64..."
+            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-win-x64.zip" -o node.zip
+            unzip -j node.zip "*/node.exe" -d src-tauri/binaries/
+            mv src-tauri/binaries/node.exe "src-tauri/binaries/node-${{ matrix.target }}.exe"
+          else
+            echo "下载 Node.js for ${{ matrix.node_platform }}-${{ matrix.node_arch }}..."
+            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${{ matrix.node_platform }}-${{ matrix.node_arch }}.tar.gz" -o node.tar.gz
+            tar -xzf node.tar.gz --strip-components=2 "*/bin/node"
+            mv node "src-tauri/binaries/node-${{ matrix.target }}"
+            chmod +x "src-tauri/binaries/node-${{ matrix.target }}"
+          fi
+
+          echo "✓ Node.js binary ready:"
+          ls -lh src-tauri/binaries/
+
+      - name: Prepare bundled openclaw runtime
+        if: steps.cache-bundled.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+
+          echo "安装 openclaw 到临时目录..."
+          INSTALL_DIR=$(mktemp -d)
+          cd "$INSTALL_DIR"
+          npm install openclaw@latest --prefix .
+
+          # 精简 koffi：只保留当前平台的构建
+          KOFFI_DIR="node_modules/openclaw/node_modules/koffi/build/koffi"
+          if [ -d "$KOFFI_DIR" ]; then
+            echo "精简 koffi 多平台构建，保留: ${{ matrix.koffi_keep }}"
+            for d in "$KOFFI_DIR"/*/; do
+              platform_name=$(basename "$d")
+              if [ "$platform_name" != "${{ matrix.koffi_keep }}" ]; then
+                echo "  删除: $platform_name"
+                rm -rf "$d"
+              fi
+            done
+          fi
+
+          # 打包为 tgz（内容为 openclaw 目录的内容，不含 node_modules/openclaw/ 前缀）
+          echo "打包 openclaw-runtime.tgz..."
+          tar -czf "$GITHUB_WORKSPACE/src-tauri/resources/openclaw-runtime.tgz" \
+            -C node_modules/openclaw .
+
+          cd "$GITHUB_WORKSPACE"
+          rm -rf "$INSTALL_DIR"
+
+          echo "✓ openclaw-runtime.tgz ready:"
+          ls -lh src-tauri/resources/
+
+      - name: Verify bundled deps
+        shell: bash
+        run: |
+          echo "=== Bundled binaries ==="
+          ls -lh src-tauri/binaries/
+          echo "=== Bundled resources ==="
+          ls -lh src-tauri/resources/
+
       # ── 构建 ─────────────────────────────────────────────
-      - name: Build Tauri app (macOS Universal)
-        if: matrix.platform == 'macos-latest'
+      - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: --target universal-apple-darwin
-
-      - name: Build Tauri app
-        if: matrix.platform != 'macos-latest'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          args: --target ${{ matrix.target }}
 
       # ── 上传构建产物 ─────────────────────────────────────
-      - name: Upload macOS artifacts
-        if: matrix.platform == 'macos-latest'
+      - name: Upload macOS arm64 artifacts
+        if: matrix.target == 'aarch64-apple-darwin'
         uses: actions/upload-artifact@v4
         with:
-          name: artifacts-macos
+          name: artifacts-macos-arm64
           path: |
-            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: error
+
+      - name: Upload macOS x64 artifacts
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-macos-x64
+          path: |
+            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
           if-no-files-found: error
 
       - name: Upload Windows artifacts
@@ -112,8 +216,8 @@ jobs:
         with:
           name: artifacts-windows
           path: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if-no-files-found: error
 
       - name: Upload Linux artifacts
@@ -122,8 +226,8 @@ jobs:
         with:
           name: artifacts-linux
           path: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
   # ── 发布 Release ───────────────────────────────────────────

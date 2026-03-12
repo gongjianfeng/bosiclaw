@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "BosiClaw",
-  "version": "0.9.0",
+  "version": "0.9.5",
   "identifier": "com.bosiclaw.manager",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,6 +34,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/node"
+    ],
+    "resources": [
+      "resources/openclaw-runtime.tgz"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

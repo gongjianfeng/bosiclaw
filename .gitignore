@@ -28,3 +28,9 @@ npm-debug.log*
 # Tauri
 src-tauri/target/
 src-tauri/Cargo.lock
+
+# Bundled dependencies (CI 构建时生成)
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+src-tauri/resources/*.tgz
+!src-tauri/resources/.gitkeep
