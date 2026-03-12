@@ -1,6 +1,6 @@
 [package]
 name = "bosiclaw"
-version = "0.0.7"
+version = "0.9.1"
 description = "BosiClaw 跨平台管理工具"
 authors = ["BosiClaw Team"]
 edition = "2021"

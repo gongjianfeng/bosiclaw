@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 use tauri::command;
 use log::{info, warn, error, debug};
 
+const DEFAULT_NPM_REGISTRY: &str = "https://registry.npmmirror.com";
+const DEFAULT_NODE_DIST_MIRROR: &str = "https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/";
+const DEFAULT_NODE_DOWNLOAD_URL: &str = "https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/";
+const DEFAULT_HOMEBREW_BREW_GIT_REMOTE: &str = "https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git";
+const DEFAULT_HOMEBREW_CORE_GIT_REMOTE: &str = "https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git";
+const DEFAULT_HOMEBREW_INSTALL_GIT_REMOTE: &str = "https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/install.git";
+const DEFAULT_HOMEBREW_BOTTLE_DOMAIN: &str = "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles";
+const DEFAULT_HOMEBREW_API_DOMAIN: &str = "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles/api";
+
 /// 环境检查结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvironmentStatus {
@@ -39,6 +48,115 @@ pub struct InstallResult {
     pub success: bool,
     pub message: String,
     pub error: Option<String>,
+}
+
+fn unix_npm_mirror_exports() -> String {
+    format!(
+        r#"
+OPENCLAW_NPM_REGISTRY="${{OPENCLAW_NPM_REGISTRY:-{registry}}}"
+OPENCLAW_NODE_DIST_MIRROR="${{OPENCLAW_NODE_DIST_MIRROR:-{dist_mirror}}}"
+export NPM_CONFIG_REGISTRY="$OPENCLAW_NPM_REGISTRY"
+export npm_config_registry="$OPENCLAW_NPM_REGISTRY"
+export npm_config_disturl="$OPENCLAW_NODE_DIST_MIRROR"
+"#,
+        registry = DEFAULT_NPM_REGISTRY,
+        dist_mirror = DEFAULT_NODE_DIST_MIRROR,
+    )
+}
+
+fn windows_npm_mirror_exports() -> String {
+    format!(
+        r#"
+if (-not $env:OPENCLAW_NPM_REGISTRY) {{ $env:OPENCLAW_NPM_REGISTRY = "{registry}" }}
+if (-not $env:OPENCLAW_NODE_DIST_MIRROR) {{ $env:OPENCLAW_NODE_DIST_MIRROR = "{dist_mirror}" }}
+$env:NPM_CONFIG_REGISTRY = $env:OPENCLAW_NPM_REGISTRY
+$env:npm_config_registry = $env:OPENCLAW_NPM_REGISTRY
+$env:npm_config_disturl = $env:OPENCLAW_NODE_DIST_MIRROR
+"#,
+        registry = DEFAULT_NPM_REGISTRY,
+        dist_mirror = DEFAULT_NODE_DIST_MIRROR,
+    )
+}
+
+fn windows_node_mirror_exports() -> String {
+    format!(
+        r#"
+if (-not $env:OPENCLAW_NODE_DIST_MIRROR) {{ $env:OPENCLAW_NODE_DIST_MIRROR = "{dist_mirror}" }}
+if (-not $env:OPENCLAW_NODE_DOWNLOAD_URL) {{ $env:OPENCLAW_NODE_DOWNLOAD_URL = "{download_url}" }}
+"#,
+        dist_mirror = DEFAULT_NODE_DIST_MIRROR,
+        download_url = DEFAULT_NODE_DOWNLOAD_URL,
+    )
+}
+
+fn unix_homebrew_mirror_exports() -> String {
+    format!(
+        r#"
+OPENCLAW_HOMEBREW_BREW_GIT_REMOTE="${{OPENCLAW_HOMEBREW_BREW_GIT_REMOTE:-{brew_git}}}"
+OPENCLAW_HOMEBREW_CORE_GIT_REMOTE="${{OPENCLAW_HOMEBREW_CORE_GIT_REMOTE:-{core_git}}}"
+OPENCLAW_HOMEBREW_INSTALL_GIT_REMOTE="${{OPENCLAW_HOMEBREW_INSTALL_GIT_REMOTE:-{install_git}}}"
+OPENCLAW_HOMEBREW_BOTTLE_DOMAIN="${{OPENCLAW_HOMEBREW_BOTTLE_DOMAIN:-{bottle_domain}}}"
+OPENCLAW_HOMEBREW_API_DOMAIN="${{OPENCLAW_HOMEBREW_API_DOMAIN:-{api_domain}}}"
+export HOMEBREW_BREW_GIT_REMOTE="$OPENCLAW_HOMEBREW_BREW_GIT_REMOTE"
+export HOMEBREW_CORE_GIT_REMOTE="$OPENCLAW_HOMEBREW_CORE_GIT_REMOTE"
+export HOMEBREW_BOTTLE_DOMAIN="$OPENCLAW_HOMEBREW_BOTTLE_DOMAIN"
+export HOMEBREW_API_DOMAIN="$OPENCLAW_HOMEBREW_API_DOMAIN"
+"#,
+        brew_git = DEFAULT_HOMEBREW_BREW_GIT_REMOTE,
+        core_git = DEFAULT_HOMEBREW_CORE_GIT_REMOTE,
+        install_git = DEFAULT_HOMEBREW_INSTALL_GIT_REMOTE,
+        bottle_domain = DEFAULT_HOMEBREW_BOTTLE_DOMAIN,
+        api_domain = DEFAULT_HOMEBREW_API_DOMAIN,
+    )
+}
+
+fn macos_node_install_script_body() -> String {
+    format!(
+        r#"
+set -e
+{homebrew_mirror_exports}
+
+ensure_brew_env() {{
+    if [[ -f /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -f /usr/local/bin/brew ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+}}
+
+if ! command -v brew &> /dev/null; then
+    echo "正在通过国内镜像安装 Homebrew..."
+    install_dir="$(mktemp -d /tmp/openclaw-homebrew-install.XXXXXX)"
+    cleanup() {{
+        rm -rf "$install_dir"
+    }}
+    trap cleanup EXIT
+
+    if git clone --depth=1 "$OPENCLAW_HOMEBREW_INSTALL_GIT_REMOTE" "$install_dir"; then
+        NONINTERACTIVE=1 /bin/bash "$install_dir/install.sh"
+    else
+        echo "镜像安装脚本拉取失败，回退官方源..."
+        rm -rf "$install_dir"
+        install_dir="$(mktemp -d /tmp/openclaw-homebrew-install.XXXXXX)"
+        git clone --depth=1 https://github.com/Homebrew/install.git "$install_dir"
+        NONINTERACTIVE=1 /bin/bash "$install_dir/install.sh"
+    fi
+fi
+
+ensure_brew_env
+
+echo "正在安装 Node.js 22..."
+if ! brew install node@22; then
+    echo "镜像源安装失败，回退官方 Homebrew 源重试..."
+    unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_CORE_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
+    brew install node@22
+fi
+
+brew link --overwrite node@22
+node --version
+"#,
+        homebrew_mirror_exports = unix_homebrew_mirror_exports(),
+    )
 }
 
 /// 检查环境状态
@@ -325,8 +443,12 @@ pub async fn install_nodejs() -> Result<InstallResult, String> {
 /// Windows 安装 Node.js
 async fn install_nodejs_windows() -> Result<InstallResult, String> {
     // 使用 winget 安装 Node.js（Windows 10/11 自带）
-    let script = r#"
+    let script = [
+        r#"
 $ErrorActionPreference = 'Stop'
+"#,
+        &windows_node_mirror_exports(),
+        r#"
 
 # 检查是否已安装
 $nodeVersion = node --version 2>$null
@@ -354,6 +476,7 @@ Invoke-Expression $fnmInstallScript
 # 配置 fnm 环境
 $env:FNM_DIR = "$env:USERPROFILE\.fnm"
 $env:Path = "$env:FNM_DIR;$env:Path"
+$env:FNM_NODE_DIST_MIRROR = $env:OPENCLAW_NODE_DIST_MIRROR
 
 # 安装 Node.js 22
 fnm install 22
@@ -369,9 +492,11 @@ if ($nodeVersion) {
     Write-Host "Node.js 安装失败"
     exit 1
 }
-"#;
+"#,
+    ]
+    .concat();
     
-    match shell::run_powershell_output(script) {
+    match shell::run_powershell_output(&script) {
         Ok(output) => {
             // 验证安装
             if get_node_version().is_some() {
@@ -398,30 +523,9 @@ if ($nodeVersion) {
 
 /// macOS 安装 Node.js
 async fn install_nodejs_macos() -> Result<InstallResult, String> {
-    // 使用 Homebrew 安装
-    let script = r#"
-# 检查 Homebrew
-if ! command -v brew &> /dev/null; then
-    echo "安装 Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    let script = macos_node_install_script_body();
     
-    # 配置 PATH
-    if [[ -f /opt/homebrew/bin/brew ]]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-    elif [[ -f /usr/local/bin/brew ]]; then
-        eval "$(/usr/local/bin/brew shellenv)"
-    fi
-fi
-
-echo "安装 Node.js 22..."
-brew install node@22
-brew link --overwrite node@22
-
-# 验证安装
-node --version
-"#;
-    
-    match shell::run_bash_output(script) {
+    match shell::run_bash_output(&script) {
         Ok(output) => Ok(InstallResult {
             success: true,
             message: format!("Node.js 安装成功！{}", output),
@@ -507,8 +611,12 @@ pub async fn install_openclaw() -> Result<InstallResult, String> {
 
 /// Windows 安装 OpenClaw
 async fn install_openclaw_windows() -> Result<InstallResult, String> {
-    let script = r#"
+    let script = [
+        r#"
 $ErrorActionPreference = 'Stop'
+"#,
+        &windows_npm_mirror_exports(),
+        r#"
 
 # 检查 Node.js
 $nodeVersion = node --version 2>$null
@@ -518,7 +626,7 @@ if (-not $nodeVersion) {
 }
 
 Write-Host "使用 npm 安装 OpenClaw..."
-npm install -g openclaw@latest --unsafe-perm
+npm install -g openclaw@latest --unsafe-perm --registry $env:OPENCLAW_NPM_REGISTRY
 
 # 验证安装
 $openclawVersion = openclaw --version 2>$null
@@ -529,9 +637,11 @@ if ($openclawVersion) {
     Write-Host "OpenClaw 安装失败"
     exit 1
 }
-"#;
+"#,
+    ]
+    .concat();
     
-    match shell::run_powershell_output(script) {
+    match shell::run_powershell_output(&script) {
         Ok(output) => {
             if get_openclaw_version().is_some() {
                 Ok(InstallResult {
@@ -557,7 +667,10 @@ if ($openclawVersion) {
 
 /// Unix 系统安装 OpenClaw
 async fn install_openclaw_unix() -> Result<InstallResult, String> {
-    let script = r#"
+    let script = format!(r#"
+set -e
+{npm_mirror_exports}
+
 # 检查 Node.js
 if ! command -v node &> /dev/null; then
     echo "错误：请先安装 Node.js"
@@ -565,13 +678,15 @@ if ! command -v node &> /dev/null; then
 fi
 
 echo "使用 npm 安装 OpenClaw..."
-npm install -g openclaw@latest --unsafe-perm
+npm install -g openclaw@latest --unsafe-perm --registry "$OPENCLAW_NPM_REGISTRY"
 
 # 验证安装
 openclaw --version
-"#;
+"#,
+        npm_mirror_exports = unix_npm_mirror_exports(),
+    );
     
-    match shell::run_bash_output(script) {
+    match shell::run_bash_output(&script) {
         Ok(output) => Ok(InstallResult {
             success: true,
             message: format!("OpenClaw 安装成功！{}", output),
@@ -675,12 +790,16 @@ pub async fn open_install_terminal(install_type: String) -> Result<String, Strin
 async fn open_nodejs_install_terminal() -> Result<String, String> {
     if platform::is_windows() {
         // Windows: 打开 PowerShell 执行安装
-        let script = r#"
+        let script = [
+            r#"
 Start-Process powershell -ArgumentList '-NoExit', '-Command', '
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "    Node.js 安装向导" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
+"#,
+            &windows_node_mirror_exports(),
+            r#"
 
 # 检查 winget
 $hasWinget = Get-Command winget -ErrorAction SilentlyContinue
@@ -688,10 +807,10 @@ if ($hasWinget) {
     Write-Host "正在使用 winget 安装 Node.js 22..." -ForegroundColor Yellow
     winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
 } else {
-    Write-Host "请从以下地址下载安装 Node.js:" -ForegroundColor Yellow
-    Write-Host "https://nodejs.org/en/download" -ForegroundColor Green
+    Write-Host "请优先从以下国内镜像下载 Node.js:" -ForegroundColor Yellow
+    Write-Host $env:OPENCLAW_NODE_DOWNLOAD_URL -ForegroundColor Green
     Write-Host ""
-    Start-Process "https://nodejs.org/en/download"
+    Start-Process $env:OPENCLAW_NODE_DOWNLOAD_URL
 }
 
 Write-Host ""
@@ -699,40 +818,25 @@ Write-Host "安装完成后请重启 OpenClaw Manager" -ForegroundColor Green
 Write-Host ""
 Read-Host "按回车键关闭此窗口"
 ' -Verb RunAs
-"#;
-        shell::run_powershell_output(script)?;
+"#,
+        ]
+        .concat();
+        shell::run_powershell_output(&script)?;
         Ok("已打开安装终端".to_string())
     } else if platform::is_macos() {
         // macOS: 打开 Terminal.app
-        let script_content = r#"#!/bin/bash
+        let script_content = format!(r#"#!/bin/bash
 clear
 echo "========================================"
 echo "    Node.js 安装向导"
 echo "========================================"
 echo ""
-
-# 检查 Homebrew
-if ! command -v brew &> /dev/null; then
-    echo "正在安装 Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    
-    if [[ -f /opt/homebrew/bin/brew ]]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-    elif [[ -f /usr/local/bin/brew ]]; then
-        eval "$(/usr/local/bin/brew shellenv)"
-    fi
-fi
-
-echo "正在安装 Node.js 22..."
-brew install node@22
-brew link --overwrite node@22
-
-echo ""
-echo "安装完成！"
-node --version
+{script_body}
 echo ""
 read -p "按回车键关闭此窗口..."
-"#;
+"#,
+            script_body = macos_node_install_script_body(),
+        );
         
         let script_path = "/tmp/openclaw_install_nodejs.command";
         std::fs::write(script_path, script_content)
@@ -750,22 +854,26 @@ read -p "按回车键关闭此窗口..."
         
         Ok("已打开安装终端".to_string())
     } else {
-        Err("请手动安装 Node.js: https://nodejs.org/".to_string())
+        Err(format!("请手动安装 Node.js，可优先使用国内镜像: {}", DEFAULT_NODE_DOWNLOAD_URL))
     }
 }
 
 /// 打开终端安装 OpenClaw
 async fn open_openclaw_install_terminal() -> Result<String, String> {
     if platform::is_windows() {
-        let script = r#"
+        let script = [
+            r#"
 Start-Process powershell -ArgumentList '-NoExit', '-Command', '
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "    OpenClaw 安装向导" -ForegroundColor White
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
+"#,
+            &windows_npm_mirror_exports(),
+            r#"
 
 Write-Host "正在安装 OpenClaw..." -ForegroundColor Yellow
-npm install -g openclaw@latest
+npm install -g openclaw@latest --registry $env:OPENCLAW_NPM_REGISTRY
 
 Write-Host ""
 Write-Host "初始化配置..."
@@ -777,19 +885,23 @@ openclaw --version
 Write-Host ""
 Read-Host "按回车键关闭此窗口"
 '
-"#;
-        shell::run_powershell_output(script)?;
+"#,
+        ]
+        .concat();
+        shell::run_powershell_output(&script)?;
         Ok("已打开安装终端".to_string())
     } else if platform::is_macos() {
-        let script_content = r#"#!/bin/bash
+        let script_content = format!(r#"#!/bin/bash
 clear
 echo "========================================"
 echo "    OpenClaw 安装向导"
 echo "========================================"
 echo ""
+set -e
+{npm_mirror_exports}
 
 echo "正在安装 OpenClaw..."
-npm install -g openclaw@latest
+npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
 
 echo ""
 echo "初始化配置..."
@@ -804,7 +916,9 @@ echo "安装完成！"
 openclaw --version
 echo ""
 read -p "按回车键关闭此窗口..."
-"#;
+"#,
+            npm_mirror_exports = unix_npm_mirror_exports(),
+        );
         
         let script_path = "/tmp/openclaw_install_openclaw.command";
         std::fs::write(script_path, script_content)
@@ -823,15 +937,17 @@ read -p "按回车键关闭此窗口..."
         Ok("已打开安装终端".to_string())
     } else {
         // Linux
-        let script_content = r#"#!/bin/bash
+        let script_content = format!(r#"#!/bin/bash
 clear
 echo "========================================"
 echo "    OpenClaw 安装向导"
 echo "========================================"
 echo ""
+set -e
+{npm_mirror_exports}
 
 echo "正在安装 OpenClaw..."
-npm install -g openclaw@latest
+npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
 
 echo ""
 echo "初始化配置..."
@@ -846,7 +962,9 @@ echo "安装完成！"
 openclaw --version
 echo ""
 read -p "按回车键关闭..."
-"#;
+"#,
+            npm_mirror_exports = unix_npm_mirror_exports(),
+        );
         
         let script_path = "/tmp/openclaw_install_openclaw.sh";
         std::fs::write(script_path, script_content)
@@ -869,7 +987,10 @@ read -p "按回车键关闭..."
             }
         }
         
-        Err("无法启动终端，请手动运行: npm install -g openclaw".to_string())
+        Err(format!(
+            "无法启动终端，请手动运行: npm install -g openclaw@latest --registry {}",
+            DEFAULT_NPM_REGISTRY
+        ))
     }
 }
 
@@ -957,7 +1078,7 @@ else
 fi
 "#;
     
-    match shell::run_bash_output(script) {
+    match shell::run_bash_output(&script) {
         Ok(output) => Ok(InstallResult {
             success: true,
             message: format!("OpenClaw 已成功卸载！{}", output),
@@ -1035,9 +1156,21 @@ pub async fn check_openclaw_update() -> Result<UpdateInfo, String> {
 fn get_latest_openclaw_version() -> Option<String> {
     // 使用 npm view 获取最新版本
     let result = if platform::is_windows() {
-        shell::run_cmd_output("npm view openclaw version")
+        shell::run_cmd_output(&format!(
+            "set NPM_CONFIG_REGISTRY={} && set npm_config_registry={} && npm view openclaw version --registry {}",
+            DEFAULT_NPM_REGISTRY,
+            DEFAULT_NPM_REGISTRY,
+            DEFAULT_NPM_REGISTRY
+        ))
     } else {
-        shell::run_bash_output("npm view openclaw version 2>/dev/null")
+        shell::run_bash_output(&format!(
+            r#"
+set -e
+{npm_mirror_exports}
+npm view openclaw version --registry "$OPENCLAW_NPM_REGISTRY" 2>/dev/null
+"#,
+            npm_mirror_exports = unix_npm_mirror_exports(),
+        ))
     };
     
     match result {
@@ -1123,7 +1256,10 @@ pub async fn update_openclaw() -> Result<InstallResult, String> {
 async fn update_openclaw_windows() -> Result<InstallResult, String> {
     info!("[更新OpenClaw] 执行 npm install -g openclaw@latest...");
     
-    match shell::run_cmd_output("npm install -g openclaw@latest") {
+    match shell::run_cmd_output(&format!(
+        "set NPM_CONFIG_REGISTRY={registry} && set npm_config_registry={registry} && npm install -g openclaw@latest --registry {registry}",
+        registry = DEFAULT_NPM_REGISTRY
+    )) {
         Ok(output) => {
             info!("[更新OpenClaw] npm 输出: {}", output);
             
@@ -1149,15 +1285,20 @@ async fn update_openclaw_windows() -> Result<InstallResult, String> {
 
 /// Unix 系统更新 OpenClaw
 async fn update_openclaw_unix() -> Result<InstallResult, String> {
-    let script = r#"
+    let script = format!(r#"
+set -e
+{npm_mirror_exports}
+
 echo "更新 OpenClaw..."
-npm install -g openclaw@latest
+npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
 
 # 验证更新
 openclaw --version
-"#;
+"#,
+        npm_mirror_exports = unix_npm_mirror_exports(),
+    );
     
-    match shell::run_bash_output(script) {
+    match shell::run_bash_output(&script) {
         Ok(output) => Ok(InstallResult {
             success: true,
             message: format!("OpenClaw 已更新！{}", output),
@@ -1168,5 +1309,35 @@ openclaw --version
             message: "OpenClaw 更新失败".to_string(),
             error: Some(e),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compare_versions_handles_v_prefix_and_patch_updates() {
+        assert!(compare_versions("v1.2.3", "1.2.4"));
+        assert!(compare_versions("1.2.3", "1.3.0"));
+        assert!(!compare_versions("1.2.3", "1.2.3"));
+        assert!(!compare_versions("1.3.0", "1.2.9"));
+    }
+
+    #[test]
+    fn unix_npm_mirror_exports_include_expected_defaults() {
+        let exports = unix_npm_mirror_exports();
+        assert!(exports.contains(DEFAULT_NPM_REGISTRY));
+        assert!(exports.contains(DEFAULT_NODE_DIST_MIRROR));
+        assert!(exports.contains("npm_config_registry"));
+    }
+
+    #[test]
+    fn macos_node_install_script_contains_cn_mirror_fallbacks() {
+        let script = macos_node_install_script_body();
+        assert!(script.contains(DEFAULT_HOMEBREW_INSTALL_GIT_REMOTE));
+        assert!(script.contains(DEFAULT_HOMEBREW_BOTTLE_DOMAIN));
+        assert!(script.contains("brew install node@22"));
+        assert!(script.contains("回退官方 Homebrew 源重试"));
     }
 }

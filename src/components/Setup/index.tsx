@@ -308,12 +308,12 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
             {/* 帮助链接 */}
             <div className="text-center pt-1">
               <a
-                href="https://nodejs.org/en/download"
+                href="https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm text-dark-400 hover:text-brand-400 transition-colors inline-flex items-center gap-1"
               >
-                手动下载 Node.js
+                手动下载 Node.js（国内镜像）
                 <ExternalLink className="w-3 h-3" />
               </a>
             </div>
@@ -403,7 +403,7 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
 
         {/* 版本信息 */}
         <p className="text-center text-dark-500 text-xs mt-6">
-          BosiClaw v0.0.7
+          BosiClaw v0.9.1
         </p>
       </motion.div>
     </div>
