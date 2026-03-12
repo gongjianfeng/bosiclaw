@@ -128,6 +128,7 @@ function Assert-LastExitCode {
 }
 
 $pathEntries = @(
+    "C:\npm-global",
     "$env:APPDATA\npm",
     "$env:USERPROFILE\AppData\Roaming\npm",
     "$env:LOCALAPPDATA\fnm",
@@ -149,9 +150,40 @@ foreach ($pathEntry in $pathEntries) {
     .to_string()
 }
 
+/// Windows 长路径缓解脚本：尝试启用长路径注册表 + 缩短 npm prefix
+fn windows_long_path_mitigation_script() -> String {
+    r#"
+# --- 长路径缓解 ---
+# 1. 尝试启用 Windows 长路径支持（需要管理员权限，失败则跳过）
+try {
+    $current = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -ErrorAction SilentlyContinue
+    if (-not $current -or $current.LongPathsEnabled -ne 1) {
+        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled' -Value 1 -ErrorAction Stop
+        Write-Host "已启用 Windows 长路径支持" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "提示：无管理员权限，跳过长路径注册表设置" -ForegroundColor Yellow
+}
+
+# 2. 检查 npm 全局 prefix 路径长度，过长则缩短以避免 MAX_PATH 260 字符限制
+$npmPrefix = (npm config get prefix 2>$null)
+if ($npmPrefix -and $npmPrefix.Trim().Length -gt 50) {
+    $shortPrefix = "C:\npm-global"
+    Write-Host "npm 全局路径过长 ($($npmPrefix.Trim().Length) 字符)，切换到 $shortPrefix ..." -ForegroundColor Yellow
+    if (-not (Test-Path $shortPrefix)) {
+        New-Item -ItemType Directory -Path $shortPrefix -Force | Out-Null
+    }
+    npm config set prefix $shortPrefix
+    Add-PathEntryIfExists $shortPrefix
+}
+"#
+    .to_string()
+}
+
 fn windows_openclaw_resolver_script() -> String {
     r#"
 $openclawCmd = Resolve-FirstCommandPath -CommandName 'openclaw' -CandidatePaths @(
+    "C:\npm-global\openclaw.cmd",
     "$env:APPDATA\npm\openclaw.cmd",
     "$env:USERPROFILE\AppData\Roaming\npm\openclaw.cmd",
     "$env:ProgramFiles\nodejs\openclaw.cmd",
@@ -772,8 +804,8 @@ $ErrorActionPreference = 'Stop'
         &windows_npm_mirror_exports(),
         &windows_command_bootstrap_script(),
         &windows_git_installer_script(),
+        &windows_long_path_mitigation_script(),
         r#"
-
 # 检查 Node.js
 $nodeVersion = node --version 2>$null
 if (-not $nodeVersion) {
@@ -1035,6 +1067,7 @@ Write-Host ""
             &windows_npm_mirror_exports(),
             &windows_command_bootstrap_script(),
             &windows_git_installer_script(),
+            &windows_long_path_mitigation_script(),
             r#"
 
 Write-Host "正在安装 OpenClaw..." -ForegroundColor Yellow
@@ -1430,17 +1463,25 @@ pub async fn update_openclaw() -> Result<InstallResult, String> {
 /// Windows 更新 OpenClaw
 async fn update_openclaw_windows() -> Result<InstallResult, String> {
     info!("[更新OpenClaw] 执行 npm install -g openclaw@latest...");
-    
-    match shell::run_cmd_output(&format!(
-        "set NPM_CONFIG_REGISTRY={registry} && set npm_config_registry={registry} && npm install -g openclaw@latest --registry {registry}",
-        registry = DEFAULT_NPM_REGISTRY
-    )) {
+
+    let script = [
+        &windows_npm_mirror_exports(),
+        &windows_command_bootstrap_script(),
+        &windows_long_path_mitigation_script(),
+        r#"
+& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY"
+if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit code: $LASTEXITCODE)" }
+"#,
+    ]
+    .concat();
+
+    match shell::run_powershell_output(&script) {
         Ok(output) => {
             info!("[更新OpenClaw] npm 输出: {}", output);
-            
+
             // 获取新版本
             let new_version = get_openclaw_version();
-            
+
             Ok(InstallResult {
                 success: true,
                 message: format!("OpenClaw 已更新到 {}", new_version.unwrap_or("最新版本".to_string())),

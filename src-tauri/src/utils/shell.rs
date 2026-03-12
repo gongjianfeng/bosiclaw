@@ -336,8 +336,11 @@ fn get_windows_openclaw_paths() -> Vec<String> {
     
     // 1. nvm4w 安装路径
     paths.push("C:\\nvm4w\\nodejs\\openclaw.cmd".to_string());
-    
-    // 2. 用户目录下的 npm 全局路径
+
+    // 2. 短路径 npm-global（长路径缓解）
+    paths.push("C:\\npm-global\\openclaw.cmd".to_string());
+
+    // 3. 用户目录下的 npm 全局路径
     if let Some(home) = dirs::home_dir() {
         let npm_path = format!("{}\\AppData\\Roaming\\npm\\openclaw.cmd", home.display());
         paths.push(npm_path);
