@@ -185,6 +185,41 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
 
     let providers = vec![
         OfficialProvider {
+            id: "unifiedapi".to_string(),
+            name: "UnifiedAPI".to_string(),
+            icon: "🌐".to_string(),
+            default_base_url: Some("https://unifiedapi.cloud".to_string()),
+            api_type: "anthropic-messages".to_string(),
+            requires_api_key: true,
+            docs_url: None,
+            suggested_models: vec![
+                SuggestedModel {
+                    id: "claude-opus-4-6".to_string(),
+                    name: "Claude Opus 4.6".to_string(),
+                    description: Some("最强大版本，适合复杂任务".to_string()),
+                    context_window: Some(200000),
+                    max_tokens: Some(8192),
+                    recommended: true,
+                },
+                SuggestedModel {
+                    id: "claude-sonnet-4-6".to_string(),
+                    name: "Claude Sonnet 4.6".to_string(),
+                    description: Some("平衡版本，性价比高".to_string()),
+                    context_window: Some(200000),
+                    max_tokens: Some(8192),
+                    recommended: false,
+                },
+                SuggestedModel {
+                    id: "claude-haiku-4-5-20251001".to_string(),
+                    name: "Claude Haiku 4.5".to_string(),
+                    description: Some("快速经济版".to_string()),
+                    context_window: Some(200000),
+                    max_tokens: Some(8192),
+                    recommended: false,
+                },
+            ],
+        },
+        OfficialProvider {
             id: "anthropic".to_string(),
             name: "Anthropic Claude".to_string(),
             icon: "🟣".to_string(),
@@ -431,8 +466,69 @@ pub async fn get_ai_config() -> Result<AIConfigOverview, String> {
     let config_path = platform::get_config_file_path();
     info!("[AI 配置] 配置文件路径: {}", config_path);
 
-    let config = load_openclaw_config()?;
+    let mut config = load_openclaw_config()?;
     debug!("[AI 配置] 配置内容: {}", serde_json::to_string_pretty(&config).unwrap_or_default());
+
+    // 检查是否有已配置的 Provider，如果没有则注入默认的 UnifiedAPI 配置
+    let providers_exist = config
+        .pointer("/models/providers")
+        .and_then(|v| v.as_object())
+        .map(|obj| !obj.is_empty())
+        .unwrap_or(false);
+
+    if !providers_exist {
+        info!("[AI 配置] 未找到已配置的 Provider，写入默认 UnifiedAPI 配置...");
+        if config.get("models").is_none() { config["models"] = json!({}); }
+        if config["models"].get("providers").is_none() { config["models"]["providers"] = json!({}); }
+        if config.get("agents").is_none() { config["agents"] = json!({}); }
+        if config["agents"].get("defaults").is_none() { config["agents"]["defaults"] = json!({}); }
+        if config["agents"]["defaults"].get("models").is_none() { config["agents"]["defaults"]["models"] = json!({}); }
+        if config["agents"]["defaults"].get("model").is_none() { config["agents"]["defaults"]["model"] = json!({}); }
+
+        config["models"]["providers"]["unifiedapi"] = json!({
+            "baseUrl": "https://unifiedapi.cloud",
+            "models": [
+                {
+                    "id": "claude-opus-4-6",
+                    "name": "Claude Opus 4.6",
+                    "api": "anthropic-messages",
+                    "input": ["text", "image"],
+                    "contextWindow": 200000,
+                    "maxTokens": 8192,
+                    "reasoning": false,
+                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                },
+                {
+                    "id": "claude-sonnet-4-6",
+                    "name": "Claude Sonnet 4.6",
+                    "api": "anthropic-messages",
+                    "input": ["text", "image"],
+                    "contextWindow": 200000,
+                    "maxTokens": 8192,
+                    "reasoning": false,
+                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                },
+                {
+                    "id": "claude-haiku-4-5-20251001",
+                    "name": "Claude Haiku 4.5",
+                    "api": "anthropic-messages",
+                    "input": ["text", "image"],
+                    "contextWindow": 200000,
+                    "maxTokens": 8192,
+                    "reasoning": false,
+                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+                }
+            ]
+        });
+
+        config["agents"]["defaults"]["models"]["unifiedapi/claude-opus-4-6"] = json!({});
+        config["agents"]["defaults"]["models"]["unifiedapi/claude-sonnet-4-6"] = json!({});
+        config["agents"]["defaults"]["models"]["unifiedapi/claude-haiku-4-5-20251001"] = json!({});
+        config["agents"]["defaults"]["model"]["primary"] = json!("unifiedapi/claude-sonnet-4-6");
+
+        let _ = save_openclaw_config(&config);
+        info!("[AI 配置] ✓ 默认 UnifiedAPI 配置已写入");
+    }
 
     // 解析主模型
     let primary_model = config

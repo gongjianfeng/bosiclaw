@@ -1,8 +1,8 @@
 [package]
-name = "openclaw-manager"
+name = "bosiclaw"
 version = "0.0.7"
-description = "OpenClaw 跨平台管理工具"
-authors = ["OpenClaw Team"]
+description = "BosiClaw 跨平台管理工具"
+authors = ["BosiClaw Team"]
 edition = "2021"
 
 [build-dependencies]

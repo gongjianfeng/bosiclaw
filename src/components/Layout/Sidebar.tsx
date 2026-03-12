@@ -38,11 +38,11 @@ export function Sidebar({ currentPage, onNavigate, serviceStatus }: SidebarProps
       {/* Logo 区域（macOS 标题栏拖拽） */}
       <div className="h-14 flex items-center px-6 titlebar-drag border-b border-dark-600">
         <div className="flex items-center gap-3 titlebar-no-drag">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-claw-400 to-claw-600 flex items-center justify-center">
-            <span className="text-lg">🦞</span>
+          <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center">
+            <img src="/claw.svg" alt="BosiClaw" className="w-8 h-8" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-white">OpenClaw</h1>
+            <h1 className="text-sm font-semibold text-white">BosiClaw</h1>
             <p className="text-xs text-gray-500">Manager</p>
           </div>
         </div>

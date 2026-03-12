@@ -1,8 +1,8 @@
 {
-  "name": "openclaw-manager",
+  "name": "bosiclaw",
   "version": "0.0.7",
-  "description": "🦞 OpenClaw 跨平台管理工具 - 高性能 AI 助手配置与服务管理",
-  "author": "OpenClaw Team",
+  "description": "🦞 BosiClaw 跨平台管理工具 - 高性能 AI 助手配置与服务管理",
+  "author": "BosiClaw Team",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -14,20 +14,20 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.2.0",
-    "@tauri-apps/plugin-shell": "^2.2.0",
+    "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-fs": "^2.2.0",
-    "@tauri-apps/plugin-process": "^2.2.0",
     "@tauri-apps/plugin-notification": "^2.2.0",
+    "@tauri-apps/plugin-process": "^2.2.0",
+    "@tauri-apps/plugin-shell": "^2.2.0",
+    "clsx": "^2.1.1",
+    "framer-motion": "^11.15.0",
+    "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "zustand": "^5.0.3",
-    "lucide-react": "^0.468.0",
-    "clsx": "^2.1.1",
-    "framer-motion": "^11.15.0"
+    "zustand": "^5.0.3"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.2.4",
+    "@tauri-apps/cli": "^2.10.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
