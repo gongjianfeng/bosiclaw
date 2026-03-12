@@ -162,10 +162,10 @@ jobs:
             done
           fi
 
-          # 打包为 tgz（内容为 openclaw 目录的内容，不含 node_modules/openclaw/ 前缀）
+          # 打包为 tgz（先输出到临时目录，避免 Windows 上 tar 无法处理带盘符的路径）
           echo "打包 openclaw-runtime.tgz..."
-          tar -czf "$GITHUB_WORKSPACE/src-tauri/resources/openclaw-runtime.tgz" \
-            -C node_modules/openclaw .
+          tar -czf openclaw-runtime.tgz -C node_modules/openclaw .
+          cp openclaw-runtime.tgz "$GITHUB_WORKSPACE/src-tauri/resources/"
 
           cd "$GITHUB_WORKSPACE"
           rm -rf "$INSTALL_DIR"
