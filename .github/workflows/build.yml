@@ -149,8 +149,30 @@ jobs:
           cd "$INSTALL_DIR"
           npm install openclaw@latest --prefix .
 
+          # npm 会把依赖 hoist 到顶层 node_modules/，需要搬回 openclaw 包内
+          echo "将 hoisted 依赖移入 openclaw/node_modules/..."
+          OPENCLAW_NM="node_modules/openclaw/node_modules"
+          mkdir -p "$OPENCLAW_NM"
+          for pkg in node_modules/*/; do
+            name=$(basename "$pkg")
+            [ "$name" = "openclaw" ] && continue
+            [ "$name" = ".package-lock.json" ] && continue
+            mv "$pkg" "$OPENCLAW_NM/"
+          done
+          # 移动 scoped packages (@scope/pkg)
+          for scope in node_modules/@*/; do
+            [ ! -d "$scope" ] && continue
+            scope_name=$(basename "$scope")
+            mkdir -p "$OPENCLAW_NM/$scope_name"
+            for pkg in "$scope"/*/; do
+              [ ! -d "$pkg" ] && continue
+              mv "$pkg" "$OPENCLAW_NM/$scope_name/"
+            done
+          done
+          echo "  依赖数量: $(ls "$OPENCLAW_NM" | wc -l)"
+
           # 精简 koffi：只保留当前平台的构建
-          KOFFI_DIR="node_modules/openclaw/node_modules/koffi/build/koffi"
+          KOFFI_DIR="$OPENCLAW_NM/koffi/build/koffi"
           if [ -d "$KOFFI_DIR" ]; then
             echo "精简 koffi 多平台构建，保留: ${{ matrix.koffi_keep }}"
             for d in "$KOFFI_DIR"/*/; do
