@@ -155,23 +155,6 @@ foreach ($pathEntry in $pathEntries) {
     .to_string()
 }
 
-fn windows_git_prerequisite_script() -> String {
-    r#"
-$gitCmd = Resolve-FirstCommandPath -CommandName 'git' -CandidatePaths @(
-    "$env:ProgramFiles\Git\cmd\git.exe",
-    "$env:ProgramFiles\Git\bin\git.exe",
-    "${env:ProgramFiles(x86)}\Git\cmd\git.exe",
-    "${env:ProgramFiles(x86)}\Git\bin\git.exe",
-    "$env:USERPROFILE\scoop\shims\git.exe"
-)
-if (-not $gitCmd) {
-    throw "未检测到 Git。请先安装 Git for Windows，并确保 git.exe 可用后再重试。下载地址: https://git-scm.com/download/win"
-}
-Add-PathEntryIfExists (Split-Path -Parent $gitCmd)
-"#
-    .to_string()
-}
-
 fn windows_openclaw_resolver_script() -> String {
     r#"
 $openclawCmd = Resolve-FirstCommandPath -CommandName 'openclaw' -CandidatePaths @(
@@ -742,7 +725,6 @@ $ErrorActionPreference = 'Stop'
 "#,
         &windows_npm_mirror_exports(),
         &windows_command_bootstrap_script(),
-        &windows_git_prerequisite_script(),
         r#"
 
 # 检查 Node.js
@@ -1005,7 +987,6 @@ Write-Host ""
 "#,
             &windows_npm_mirror_exports(),
             &windows_command_bootstrap_script(),
-            &windows_git_prerequisite_script(),
             r#"
 
 Write-Host "正在安装 OpenClaw..." -ForegroundColor Yellow
@@ -1515,18 +1496,11 @@ mod tests {
     }
 
     #[test]
-    fn windows_command_bootstrap_includes_git_and_npm_paths() {
+    fn windows_command_bootstrap_includes_common_cli_paths() {
         let script = windows_command_bootstrap_script();
         assert!(script.contains("$env:APPDATA\\npm"));
         assert!(script.contains("$env:ProgramFiles\\Git\\cmd"));
         assert!(script.contains("function Assert-LastExitCode"));
-    }
-
-    #[test]
-    fn windows_git_prerequisite_script_surfaces_git_download_message() {
-        let script = windows_git_prerequisite_script();
-        assert!(script.contains("Resolve-FirstCommandPath -CommandName 'git'"));
-        assert!(script.contains("https://git-scm.com/download/win"));
     }
 
     #[test]
