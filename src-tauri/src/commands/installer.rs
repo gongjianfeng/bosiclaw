@@ -56,13 +56,10 @@ fn unix_npm_mirror_exports() -> String {
     format!(
         r#"
 OPENCLAW_NPM_REGISTRY="${{OPENCLAW_NPM_REGISTRY:-{registry}}}"
-OPENCLAW_NODE_DIST_MIRROR="${{OPENCLAW_NODE_DIST_MIRROR:-{dist_mirror}}}"
 export NPM_CONFIG_REGISTRY="$OPENCLAW_NPM_REGISTRY"
 export npm_config_registry="$OPENCLAW_NPM_REGISTRY"
-export npm_config_disturl="$OPENCLAW_NODE_DIST_MIRROR"
 "#,
         registry = DEFAULT_NPM_REGISTRY,
-        dist_mirror = DEFAULT_NODE_DIST_MIRROR,
     )
 }
 
@@ -70,13 +67,10 @@ fn windows_npm_mirror_exports() -> String {
     format!(
         r#"
 if (-not $env:OPENCLAW_NPM_REGISTRY) {{ $env:OPENCLAW_NPM_REGISTRY = "{registry}" }}
-if (-not $env:OPENCLAW_NODE_DIST_MIRROR) {{ $env:OPENCLAW_NODE_DIST_MIRROR = "{dist_mirror}" }}
 $env:NPM_CONFIG_REGISTRY = $env:OPENCLAW_NPM_REGISTRY
 $env:npm_config_registry = $env:OPENCLAW_NPM_REGISTRY
-$env:npm_config_disturl = $env:OPENCLAW_NODE_DIST_MIRROR
 "#,
         registry = DEFAULT_NPM_REGISTRY,
-        dist_mirror = DEFAULT_NODE_DIST_MIRROR,
     )
 }
 
@@ -166,6 +160,58 @@ $openclawCmd = Resolve-FirstCommandPath -CommandName 'openclaw' -CandidatePaths 
 )
 if ($openclawCmd) {
     Add-PathEntryIfExists (Split-Path -Parent $openclawCmd)
+}
+"#
+    .to_string()
+}
+
+fn windows_git_installer_script() -> String {
+    r#"
+$gitCandidatePaths = @(
+    "$env:ProgramFiles\Git\cmd\git.exe",
+    "$env:ProgramFiles\Git\bin\git.exe",
+    "${env:ProgramFiles(x86)}\Git\cmd\git.exe",
+    "${env:ProgramFiles(x86)}\Git\bin\git.exe",
+    "$env:USERPROFILE\scoop\shims\git.exe"
+)
+
+$gitCmd = Resolve-FirstCommandPath -CommandName 'git' -CandidatePaths $gitCandidatePaths
+if (-not $gitCmd) {
+    Write-Host "未检测到 Git，正在尝试自动安装..." -ForegroundColor Yellow
+    $gitInstalled = $false
+
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($winget) {
+        Write-Host "尝试使用 winget 安装 Git for Windows..." -ForegroundColor Yellow
+        & winget install --id Git.Git --accept-source-agreements --accept-package-agreements --disable-interactivity
+        $gitInstalled = ($LASTEXITCODE -eq 0)
+    }
+
+    if (-not $gitInstalled) {
+        $choco = Get-Command choco -ErrorAction SilentlyContinue
+        if ($choco) {
+            Write-Host "尝试使用 Chocolatey 安装 Git..." -ForegroundColor Yellow
+            & choco install git -y
+            $gitInstalled = ($LASTEXITCODE -eq 0)
+        }
+    }
+
+    if (-not $gitInstalled) {
+        $scoop = Get-Command scoop -ErrorAction SilentlyContinue
+        if ($scoop) {
+            Write-Host "尝试使用 Scoop 安装 Git..." -ForegroundColor Yellow
+            & scoop install git
+            $gitInstalled = ($LASTEXITCODE -eq 0)
+        }
+    }
+
+    $gitCmd = Resolve-FirstCommandPath -CommandName 'git' -CandidatePaths $gitCandidatePaths
+}
+
+if ($gitCmd) {
+    Add-PathEntryIfExists (Split-Path -Parent $gitCmd)
+} else {
+    throw "自动安装 Git 失败。请手动安装 Git for Windows: https://git-scm.com/download/win"
 }
 "#
     .to_string()
@@ -725,6 +771,7 @@ $ErrorActionPreference = 'Stop'
 "#,
         &windows_npm_mirror_exports(),
         &windows_command_bootstrap_script(),
+        &windows_git_installer_script(),
         r#"
 
 # 检查 Node.js
@@ -735,7 +782,7 @@ if (-not $nodeVersion) {
 }
 
 Write-Host "使用 npm 安装 OpenClaw..."
-& npm install -g openclaw@latest --unsafe-perm "--registry=$env:OPENCLAW_NPM_REGISTRY"
+& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY"
 Assert-LastExitCode "OpenClaw 安装失败"
 "#,
         &windows_openclaw_resolver_script(),
@@ -794,7 +841,7 @@ if ! command -v node &> /dev/null; then
 fi
 
 echo "使用 npm 安装 OpenClaw..."
-npm install -g openclaw@latest --unsafe-perm --registry "$OPENCLAW_NPM_REGISTRY"
+npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
 
 # 验证安装
 openclaw --version
@@ -987,10 +1034,11 @@ Write-Host ""
 "#,
             &windows_npm_mirror_exports(),
             &windows_command_bootstrap_script(),
+            &windows_git_installer_script(),
             r#"
 
 Write-Host "正在安装 OpenClaw..." -ForegroundColor Yellow
-& npm install -g openclaw@latest --unsafe-perm "--registry=$env:OPENCLAW_NPM_REGISTRY"
+& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY"
 Assert-LastExitCode "OpenClaw 安装失败"
 "#,
             &windows_openclaw_resolver_script(),
@@ -1015,7 +1063,7 @@ Write-Host ""
 "#,
         ]
         .concat();
-        open_windows_powershell_terminal(&script_content, false)?;
+        open_windows_powershell_terminal(&script_content, true)?;
         Ok("已打开安装终端".to_string())
     } else if platform::is_macos() {
         let script_content = format!(r#"#!/bin/bash
@@ -1455,8 +1503,8 @@ mod tests {
     fn unix_npm_mirror_exports_include_expected_defaults() {
         let exports = unix_npm_mirror_exports();
         assert!(exports.contains(DEFAULT_NPM_REGISTRY));
-        assert!(exports.contains(DEFAULT_NODE_DIST_MIRROR));
         assert!(exports.contains("npm_config_registry"));
+        assert!(!exports.contains("npm_config_disturl"));
     }
 
     #[test]
@@ -1508,5 +1556,14 @@ mod tests {
         let script = windows_openclaw_resolver_script();
         assert!(script.contains("$env:APPDATA\\npm\\openclaw.cmd"));
         assert!(script.contains("C:\\nvm4w\\nodejs\\openclaw.cmd"));
+    }
+
+    #[test]
+    fn windows_git_installer_script_tries_known_package_managers() {
+        let script = windows_git_installer_script();
+        assert!(script.contains("winget install --id Git.Git"));
+        assert!(script.contains("& choco install git -y"));
+        assert!(script.contains("& scoop install git"));
+        assert!(script.contains("https://git-scm.com/download/win"));
     }
 }
