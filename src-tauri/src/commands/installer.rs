@@ -858,8 +858,13 @@ if (-not $nodeVersion) {
 }
 
 Write-Host "使用 npm 安装 OpenClaw..."
-& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY"
-Assert-LastExitCode "OpenClaw 安装失败"
+& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" 2>&1 | Write-Host
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "常规安装失败（可能是可选依赖编译问题），使用 --ignore-scripts 重试..." -ForegroundColor Yellow
+    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --ignore-scripts
+    Assert-LastExitCode "OpenClaw 安装失败"
+}
 "#,
         &windows_openclaw_resolver_script(),
         r#"
@@ -1115,8 +1120,13 @@ Write-Host ""
             r#"
 
 Write-Host "正在安装 OpenClaw..." -ForegroundColor Yellow
-& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY"
-Assert-LastExitCode "OpenClaw 安装失败"
+& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" 2>&1 | Write-Host
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "常规安装失败（可能是可选依赖编译问题），使用 --ignore-scripts 重试..." -ForegroundColor Yellow
+    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --ignore-scripts
+    Assert-LastExitCode "OpenClaw 安装失败"
+}
 "#,
             &windows_openclaw_resolver_script(),
             r#"
@@ -1513,8 +1523,12 @@ async fn update_openclaw_windows() -> Result<InstallResult, String> {
         &windows_command_bootstrap_script(),
         &windows_long_path_mitigation_script(),
         r#"
-& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY"
-if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit code: $LASTEXITCODE)" }
+& npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" 2>&1 | Write-Host
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "常规安装失败，使用 --ignore-scripts 重试..."
+    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --ignore-scripts
+    if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit code: $LASTEXITCODE)" }
+}
 "#,
     ]
     .concat();
