@@ -1,4 +1,5 @@
 use std::env;
+use std::path::PathBuf;
 
 /// 获取操作系统类型
 pub fn get_os() -> String {
@@ -63,4 +64,17 @@ pub fn is_windows() -> bool {
 /// 检测当前平台是否为 Linux
 pub fn is_linux() -> bool {
     env::consts::OS == "linux"
+}
+
+/// 获取应用托管运行时目录
+pub fn get_manager_runtime_dir() -> String {
+    let mut base = dirs::data_local_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    // 使用独立目录避免污染 openclaw 自身配置。
+    let app_dir = if is_windows() { "BosiClaw" } else { "bosiclaw" };
+    base.push(app_dir);
+    base.push("runtime");
+    base.display().to_string()
 }
