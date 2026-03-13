@@ -31,14 +31,15 @@ jobs:
               src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
               src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
           # macOS - Intel
-          - platform: macos-15-intel
-            target: x86_64-apple-darwin
-            rust_targets: x86_64-apple-darwin
-            label: macOS Intel
-            artifact_name: artifacts-macos-intel
-            artifact_path: |
-              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
+          # 暂时停用，先聚焦 Apple Silicon 发布链路稳定性
+          # - platform: macos-15-intel
+          #   target: x86_64-apple-darwin
+          #   rust_targets: x86_64-apple-darwin
+          #   label: macOS Intel
+          #   artifact_name: artifacts-macos-intel
+          #   artifact_path: |
+          #     src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          #     src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
           # Windows
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
@@ -49,14 +50,15 @@ jobs:
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
               src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           # Linux
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            rust_targets: x86_64-unknown-linux-gnu
-            label: Linux
-            artifact_name: artifacts-linux
-            artifact_path: |
-              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
-              src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+          # 暂时停用，先聚焦 macOS M 系列和 Windows 发布链路
+          # - platform: ubuntu-22.04
+          #   target: x86_64-unknown-linux-gnu
+          #   rust_targets: x86_64-unknown-linux-gnu
+          #   label: Linux
+          #   artifact_name: artifacts-linux
+          #   artifact_path: |
+          #     src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+          #     src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.label }})
