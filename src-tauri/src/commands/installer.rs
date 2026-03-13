@@ -63,6 +63,40 @@ export npm_config_registry="$OPENCLAW_NPM_REGISTRY"
     )
 }
 
+/// Unix npm install openclaw 带 SSL 和 postinstall 失败重试的 bash 代码段
+fn unix_npm_install_openclaw_snippet() -> String {
+    format!(r#"
+# 尝试安装 openclaw，带 SSL 和 postinstall 失败重试
+_openclaw_install_ok=false
+
+# 第 1 次：正常安装
+if npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY" 2>&1; then
+    _openclaw_install_ok=true
+fi
+
+# 第 2 次：关闭 strict-ssl 重试（解决企业代理 / 证书链问题）
+if [ "$_openclaw_install_ok" = false ]; then
+    echo "安装失败，尝试关闭 SSL 严格校验重试..."
+    if npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY" --strict-ssl=false 2>&1; then
+        _openclaw_install_ok=true
+    fi
+fi
+
+# 第 3 次：回退官方源 + 关闭 strict-ssl + --ignore-scripts
+if [ "$_openclaw_install_ok" = false ]; then
+    echo "镜像源安装失败，回退官方 npm 源重试..."
+    if npm install -g openclaw@latest --registry https://registry.npmjs.org --strict-ssl=false --ignore-scripts 2>&1; then
+        _openclaw_install_ok=true
+    fi
+fi
+
+if [ "$_openclaw_install_ok" = false ]; then
+    echo "OpenClaw 安装失败"
+    exit 1
+fi
+"#)
+}
+
 fn windows_npm_mirror_exports() -> String {
     format!(
         r#"
@@ -858,13 +892,29 @@ if (-not $nodeVersion) {
 }
 
 Write-Host "使用 npm 安装 OpenClaw..."
+$installed = $false
+
+# 第 1 次：正常安装
 & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" 2>&1 | Write-Host
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -eq 0) { $installed = $true }
+
+# 第 2 次：关闭 strict-ssl（解决企业代理/证书链问题）+ --ignore-scripts
+if (-not $installed) {
     Write-Host ""
-    Write-Host "常规安装失败（可能是可选依赖编译问题），使用 --ignore-scripts 重试..." -ForegroundColor Yellow
-    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --ignore-scripts
-    Assert-LastExitCode "OpenClaw 安装失败"
+    Write-Host "安装失败，尝试关闭 SSL 严格校验并跳过可选脚本重试..." -ForegroundColor Yellow
+    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --strict-ssl=false --ignore-scripts 2>&1 | Write-Host
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
 }
+
+# 第 3 次：回退官方源
+if (-not $installed) {
+    Write-Host ""
+    Write-Host "镜像源安装失败，回退官方 npm 源重试..." -ForegroundColor Yellow
+    & npm install -g openclaw@latest --registry https://registry.npmjs.org --strict-ssl=false --ignore-scripts 2>&1 | Write-Host
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
+}
+
+if (-not $installed) { throw "OpenClaw 安装失败" }
 "#,
         &windows_openclaw_resolver_script(),
         r#"
@@ -912,7 +962,6 @@ if ($openclawVersion) {
 /// Unix 系统安装 OpenClaw
 async fn install_openclaw_unix() -> Result<InstallResult, String> {
     let script = format!(r#"
-set -e
 {npm_mirror_exports}
 
 # 检查 Node.js
@@ -922,12 +971,13 @@ if ! command -v node &> /dev/null; then
 fi
 
 echo "使用 npm 安装 OpenClaw..."
-npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
+{npm_install_snippet}
 
 # 验证安装
 openclaw --version
 "#,
         npm_mirror_exports = unix_npm_mirror_exports(),
+        npm_install_snippet = unix_npm_install_openclaw_snippet(),
     );
     
     match shell::run_bash_output(&script) {
@@ -1120,13 +1170,26 @@ Write-Host ""
             r#"
 
 Write-Host "正在安装 OpenClaw..." -ForegroundColor Yellow
+$installed = $false
+
 & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" 2>&1 | Write-Host
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -eq 0) { $installed = $true }
+
+if (-not $installed) {
     Write-Host ""
-    Write-Host "常规安装失败（可能是可选依赖编译问题），使用 --ignore-scripts 重试..." -ForegroundColor Yellow
-    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --ignore-scripts
-    Assert-LastExitCode "OpenClaw 安装失败"
+    Write-Host "安装失败，尝试关闭 SSL 严格校验并跳过可选脚本重试..." -ForegroundColor Yellow
+    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --strict-ssl=false --ignore-scripts 2>&1 | Write-Host
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
 }
+
+if (-not $installed) {
+    Write-Host ""
+    Write-Host "镜像源安装失败，回退官方 npm 源重试..." -ForegroundColor Yellow
+    & npm install -g openclaw@latest --registry https://registry.npmjs.org --strict-ssl=false --ignore-scripts 2>&1 | Write-Host
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
+}
+
+if (-not $installed) { throw "OpenClaw 安装失败" }
 "#,
             &windows_openclaw_resolver_script(),
             r#"
@@ -1159,11 +1222,10 @@ echo "========================================"
 echo "    OpenClaw 安装向导"
 echo "========================================"
 echo ""
-set -e
 {npm_mirror_exports}
 
 echo "正在安装 OpenClaw..."
-npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
+{npm_install_snippet}
 
 echo ""
 echo "初始化配置..."
@@ -1180,8 +1242,9 @@ echo ""
 read -p "按回车键关闭此窗口..."
 "#,
             npm_mirror_exports = unix_npm_mirror_exports(),
+            npm_install_snippet = unix_npm_install_openclaw_snippet(),
         );
-        
+
         let script_path = "/tmp/openclaw_install_openclaw.command";
         std::fs::write(script_path, script_content)
             .map_err(|e| format!("创建脚本失败: {}", e))?;
@@ -1205,11 +1268,10 @@ echo "========================================"
 echo "    OpenClaw 安装向导"
 echo "========================================"
 echo ""
-set -e
 {npm_mirror_exports}
 
 echo "正在安装 OpenClaw..."
-npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
+{npm_install_snippet}
 
 echo ""
 echo "初始化配置..."
@@ -1226,6 +1288,7 @@ echo ""
 read -p "按回车键关闭..."
 "#,
             npm_mirror_exports = unix_npm_mirror_exports(),
+            npm_install_snippet = unix_npm_install_openclaw_snippet(),
         );
         
         let script_path = "/tmp/openclaw_install_openclaw.sh";
@@ -1523,12 +1586,24 @@ async fn update_openclaw_windows() -> Result<InstallResult, String> {
         &windows_command_bootstrap_script(),
         &windows_long_path_mitigation_script(),
         r#"
+$installed = $false
+
 & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" 2>&1 | Write-Host
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "常规安装失败，使用 --ignore-scripts 重试..."
-    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --ignore-scripts
-    if ($LASTEXITCODE -ne 0) { throw "npm install failed (exit code: $LASTEXITCODE)" }
+if ($LASTEXITCODE -eq 0) { $installed = $true }
+
+if (-not $installed) {
+    Write-Host "安装失败，尝试关闭 SSL 严格校验并跳过可选脚本重试..."
+    & npm install -g openclaw@latest "--registry=$env:OPENCLAW_NPM_REGISTRY" --strict-ssl=false --ignore-scripts 2>&1 | Write-Host
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
 }
+
+if (-not $installed) {
+    Write-Host "镜像源安装失败，回退官方 npm 源重试..."
+    & npm install -g openclaw@latest --registry https://registry.npmjs.org --strict-ssl=false --ignore-scripts 2>&1 | Write-Host
+    if ($LASTEXITCODE -eq 0) { $installed = $true }
+}
+
+if (-not $installed) { throw "npm install failed" }
 "#,
     ]
     .concat();
@@ -1560,16 +1635,16 @@ if ($LASTEXITCODE -ne 0) {
 /// Unix 系统更新 OpenClaw
 async fn update_openclaw_unix() -> Result<InstallResult, String> {
     let script = format!(r#"
-set -e
 {npm_mirror_exports}
 
 echo "更新 OpenClaw..."
-npm install -g openclaw@latest --registry "$OPENCLAW_NPM_REGISTRY"
+{npm_install_snippet}
 
 # 验证更新
 openclaw --version
 "#,
         npm_mirror_exports = unix_npm_mirror_exports(),
+        npm_install_snippet = unix_npm_install_openclaw_snippet(),
     );
     
     match shell::run_bash_output(&script) {
