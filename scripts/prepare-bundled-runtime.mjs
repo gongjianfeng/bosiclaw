@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -138,6 +147,93 @@ function copyMinimalNodeRuntime(sourceRoot, targetRoot) {
   for (const relativePath of relativePaths) {
     copyFile(join(sourceRoot, relativePath), join(targetRoot, relativePath));
   }
+}
+
+function walkFiles(root) {
+  const pending = [root];
+  const files = [];
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || !existsSync(current)) {
+      continue;
+    }
+
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const entryPath = join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+      } else if (entry.isFile()) {
+        files.push(entryPath);
+      }
+    }
+  }
+
+  return files;
+}
+
+function getPathSize(path) {
+  if (!existsSync(path)) {
+    return 0;
+  }
+
+  const stats = statSync(path);
+  if (stats.isFile()) {
+    return stats.size;
+  }
+
+  return walkFiles(path).reduce((sum, file) => sum + statSync(file).size, 0);
+}
+
+function removePackagedPath(path) {
+  if (!existsSync(path)) {
+    return 0;
+  }
+
+  const size = getPathSize(path);
+  rmSync(path, { recursive: true, force: true });
+  return size;
+}
+
+function pruneOpenClawPackage(packageRoot) {
+  const removableDirectories = [join(packageRoot, 'docs')];
+  const removableTopLevelFiles = [
+    join(packageRoot, 'README.md'),
+    join(packageRoot, 'README-header.png'),
+    join(packageRoot, 'CHANGELOG.md'),
+  ];
+  const removableFilePattern = /\.(d\.[cm]?ts|map|md|mdx)$/iu;
+
+  let removedFiles = 0;
+  let removedBytes = 0;
+
+  for (const directory of removableDirectories) {
+    if (!existsSync(directory)) {
+      continue;
+    }
+    removedFiles += walkFiles(directory).length;
+    removedBytes += removePackagedPath(directory);
+  }
+
+  for (const file of removableTopLevelFiles) {
+    if (!existsSync(file)) {
+      continue;
+    }
+    removedFiles += 1;
+    removedBytes += removePackagedPath(file);
+  }
+
+  for (const file of walkFiles(packageRoot)) {
+    const relativePath = file.slice(packageRoot.length + 1);
+    if (!removableFilePattern.test(relativePath)) {
+      continue;
+    }
+
+    removedFiles += 1;
+    removedBytes += removePackagedPath(file);
+  }
+
+  return { removedFiles, removedBytes };
 }
 
 function resolveNodeRoot(nodeBin) {
@@ -317,6 +413,11 @@ function main() {
 
   console.log(`复制 OpenClaw 包: ${packageRoot} -> ${targetPackageRoot}`);
   copyDir(packageRoot, targetPackageRoot);
+
+  const pruneResult = pruneOpenClawPackage(targetPackageRoot);
+  console.log(
+    `裁剪 OpenClaw 非运行时文件: ${pruneResult.removedFiles} 个, ${(pruneResult.removedBytes / 1024 / 1024).toFixed(1)} MB`
+  );
 
   const manifest = {
     generatedAt: new Date().toISOString(),
