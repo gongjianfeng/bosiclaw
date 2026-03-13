@@ -60,6 +60,9 @@
       "webviewInstallMode": {
         "type": "offlineInstaller",
         "silent": true
+      },
+      "nsis": {
+        "compression": "zlib"
       }
     },
     "linux": {
