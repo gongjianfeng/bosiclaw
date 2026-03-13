@@ -193,8 +193,19 @@ fn extract_tgz(tgz_path: &Path, dest: &Path) -> Result<(), String> {
     archive.set_preserve_permissions(true);
     archive.set_overwrite(true);
 
+    let mut extracted = 0u64;
+    let mut skipped_symlinks = 0u64;
+
     for entry in archive.entries().map_err(|e| format!("读取 tgz entries 失败: {}", e))? {
         let mut entry = entry.map_err(|e| format!("读取 entry 失败: {}", e))?;
+
+        // 跳过 symlink（Windows 上创建 symlink 需要特殊权限，.bin/ 目录的 symlink 运行时不需要）
+        let entry_type = entry.header().entry_type();
+        if entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link {
+            skipped_symlinks += 1;
+            continue;
+        }
+
         let path = entry.path().map_err(|e| format!("读取 path 失败: {}", e))?;
         let path = path.to_path_buf();
 
@@ -221,9 +232,11 @@ fn extract_tgz(tgz_path: &Path, dest: &Path) -> Result<(), String> {
 
         entry.unpack(&dest_path)
             .map_err(|e| format!("解压文件失败 {}: {}", stripped.display(), e))?;
+        extracted += 1;
     }
 
-    info!("[Bundled] tgz 解压完成: {}", dest.display());
+    info!("[Bundled] tgz 解压完成: {}, 文件数: {}, 跳过 symlink: {}",
+        dest.display(), extracted, skipped_symlinks);
     Ok(())
 }
 
