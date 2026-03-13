@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -81,6 +81,63 @@ function copyDir(source, target) {
     dereference: true,
     verbatimSymlinks: false,
   });
+}
+
+function copyFile(source, target) {
+  ensureDir(dirname(target));
+  cpSync(source, target, {
+    force: true,
+    dereference: true,
+    recursive: false,
+  });
+}
+
+function listMatchingFiles(root, relativeDir, predicate) {
+  const dir = join(root, relativeDir);
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && predicate(entry.name))
+    .map((entry) => join(relativeDir, entry.name));
+}
+
+function isNodeTopLevelRuntimeFile(name) {
+  return (
+    /^node(\.exe|\.dll|\.lib)?$/iu.test(name) ||
+    /^libnode(\..+)?$/iu.test(name) ||
+    /\.(dll|dylib)$/iu.test(name) ||
+    /\.so(\..+)?$/iu.test(name) ||
+    /^(icudtl\.dat|snapshot_blob\.bin|v8_context_snapshot\.bin)$/iu.test(name)
+  );
+}
+
+function isNodeLibraryRuntimeFile(name) {
+  return (
+    /^libnode(\..+)?$/iu.test(name) ||
+    /\.(dll|dylib)$/iu.test(name) ||
+    /\.so(\..+)?$/iu.test(name)
+  );
+}
+
+function copyMinimalNodeRuntime(sourceRoot, targetRoot) {
+  cleanPath(targetRoot);
+  ensureDir(targetRoot);
+
+  const relativePaths = new Set([
+    ...listMatchingFiles(sourceRoot, '', isNodeTopLevelRuntimeFile),
+    ...listMatchingFiles(sourceRoot, 'bin', (name) => /^node(\.exe)?$/iu.test(name)),
+    ...listMatchingFiles(sourceRoot, 'lib', isNodeLibraryRuntimeFile),
+  ]);
+
+  if (relativePaths.size === 0) {
+    throw new Error(`未找到可复制的 Node 运行时文件: ${sourceRoot}`);
+  }
+
+  for (const relativePath of relativePaths) {
+    copyFile(join(sourceRoot, relativePath), join(targetRoot, relativePath));
+  }
 }
 
 function resolveNodeRoot(nodeBin) {
@@ -255,8 +312,8 @@ function main() {
   ensureDir(dirname(targetNodeRoot));
   ensureDir(dirname(targetPackageRoot));
 
-  console.log(`复制 Node 运行时: ${nodeRoot} -> ${targetNodeRoot}`);
-  copyDir(nodeRoot, targetNodeRoot);
+  console.log(`复制最小 Node 运行时: ${nodeRoot} -> ${targetNodeRoot}`);
+  copyMinimalNodeRuntime(nodeRoot, targetNodeRoot);
 
   console.log(`复制 OpenClaw 包: ${packageRoot} -> ${targetPackageRoot}`);
   copyDir(packageRoot, targetPackageRoot);
