@@ -60,7 +60,7 @@ function run(command, args, options = {}) {
     );
   }
 
-  return result.stdout.trim();
+  return typeof result.stdout === 'string' ? result.stdout.trim() : '';
 }
 
 function ensureDir(path) {
@@ -121,6 +121,37 @@ function getDefaultNpmCacheDir() {
   return resolve(repoRoot, '.tmp', 'bundled-openclaw-npm-cache');
 }
 
+function installOpenClawWithNpm(stagingPrefix, openclawVersion, env) {
+  const npmArgs = [
+    'install',
+    '--global',
+    `--prefix=${stagingPrefix}`,
+    `openclaw@${openclawVersion}`,
+  ];
+
+  if (process.platform === 'win32') {
+    const command = process.env.ComSpec ?? process.env.comspec ?? 'cmd.exe';
+    const script = `npm.cmd ${npmArgs.map(quoteForWindowsCmd).join(' ')}`;
+    return run(command, ['/d', '/s', '/c', script], {
+      stdio: 'inherit',
+      env,
+    });
+  }
+
+  return run('npm', npmArgs, {
+    stdio: 'inherit',
+    env,
+  });
+}
+
+function quoteForWindowsCmd(value) {
+  if (!/[\s"]/u.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const nodeBin = args['node-bin'] ?? process.env.BOSICLAW_NODE_BIN ?? process.execPath;
@@ -145,7 +176,6 @@ function main() {
   let packageRoot = packageRootArg ? resolve(packageRootArg) : '';
 
   if (!packageRoot) {
-    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     cleanPath(stagingPrefix);
     ensureDir(stagingPrefix);
     ensureDir(npmCacheDir);
@@ -154,20 +184,13 @@ function main() {
     if (process.platform === 'win32') {
       console.log(`Windows CI 使用短 npm cache 目录: ${npmCacheDir}`);
     }
-    run(
-      npmCommand,
-      ['install', '--global', `--prefix=${stagingPrefix}`, `openclaw@${openclawVersion}`],
-      {
-        stdio: 'inherit',
-        env: {
-          ...process.env,
-          SHARP_IGNORE_GLOBAL_LIBVIPS:
-            process.env.SHARP_IGNORE_GLOBAL_LIBVIPS ?? '1',
-          npm_config_cache: npmCacheDir,
-          npm_config_loglevel: process.env.OPENCLAW_NPM_LOGLEVEL ?? 'notice',
-        },
-      }
-    );
+    installOpenClawWithNpm(stagingPrefix, openclawVersion, {
+      ...process.env,
+      SHARP_IGNORE_GLOBAL_LIBVIPS:
+        process.env.SHARP_IGNORE_GLOBAL_LIBVIPS ?? '1',
+      npm_config_cache: npmCacheDir,
+      npm_config_loglevel: process.env.OPENCLAW_NPM_LOGLEVEL ?? 'notice',
+    });
 
     packageRoot = resolvePackagedOpenClawRoot(stagingPrefix) ?? '';
   }
