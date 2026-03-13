@@ -143,6 +143,35 @@ fn ensure_executable(path: &Path) {
 #[cfg(not(unix))]
 fn ensure_executable(_path: &Path) {}
 
+#[cfg_attr(not(windows), allow(dead_code))]
+fn normalize_windows_command_path_str(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{}", rest);
+    }
+
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+
+    path.to_string()
+}
+
+fn normalize_command_path(path: &Path) -> PathBuf {
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+
+    #[cfg(windows)]
+    {
+        return PathBuf::from(normalize_windows_command_path_str(
+            &normalized.to_string_lossy(),
+        ));
+    }
+
+    #[cfg(not(windows))]
+    {
+        normalized
+    }
+}
+
 fn resolve_bundled_node_runtime() -> Option<NodeRuntime> {
     let runtime_root = platform::get_bundled_runtime_dir()?;
     let node_root_candidates = [
@@ -303,6 +332,12 @@ fn resolve_openclaw_runtime() -> Option<OpenClawRuntime> {
 }
 
 fn resolve_bundled_openclaw_cwd(runtime: &BundledOpenClawRuntime) -> PathBuf {
+    // Windows 上优先使用包目录作为 cwd，避免 HOME/状态目录探测异常时退化成盘符路径（如 "C:"）
+    // 导致 node 在解析入口脚本前直接失败。
+    if platform::is_windows() {
+        return normalize_command_path(&runtime.package_root);
+    }
+
     let config_dir = PathBuf::from(platform::get_config_dir());
     if config_dir.exists() {
         return config_dir;
@@ -324,10 +359,21 @@ fn is_bundled_runtime_blocked_env_key(key: &str) -> bool {
 fn build_openclaw_command(runtime: &OpenClawRuntime, args: &[&str]) -> Command {
     let mut command = match runtime {
         OpenClawRuntime::Bundled(runtime) => {
-            let mut command = Command::new(&runtime.node_path);
+            let node_path = normalize_command_path(&runtime.node_path);
+            let entry_path = normalize_command_path(&runtime.entry_path);
+            let cwd = resolve_bundled_openclaw_cwd(runtime);
+
+            debug!(
+                "[Shell] bundled 启动参数 node={} entry={} cwd={}",
+                node_path.display(),
+                entry_path.display(),
+                cwd.display()
+            );
+
+            let mut command = Command::new(&node_path);
             command
-                .arg(&runtime.entry_path)
-                .current_dir(resolve_bundled_openclaw_cwd(runtime));
+                .arg(&entry_path)
+                .current_dir(cwd);
             command
         }
         OpenClawRuntime::System(runtime) => {
@@ -860,6 +906,22 @@ mod tests {
         assert!(is_bundled_runtime_blocked_env_key("openclaw_state_dir"));
         assert!(is_bundled_runtime_blocked_env_key("OPENCLAW_CONFIG_PATH"));
         assert!(!is_bundled_runtime_blocked_env_key("OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn normalize_windows_command_path_str_strips_verbatim_disk_prefix() {
+        assert_eq!(
+            normalize_windows_command_path_str(r"\\?\C:\Users\gjf\AppData\Local\Programs\BosiClaw\runtime\lib\node_modules\openclaw\openclaw.mjs"),
+            r"C:\Users\gjf\AppData\Local\Programs\BosiClaw\runtime\lib\node_modules\openclaw\openclaw.mjs"
+        );
+    }
+
+    #[test]
+    fn normalize_windows_command_path_str_strips_verbatim_unc_prefix() {
+        assert_eq!(
+            normalize_windows_command_path_str(r"\\?\UNC\server\share\openclaw.mjs"),
+            r"\\server\share\openclaw.mjs"
+        );
     }
 }
 

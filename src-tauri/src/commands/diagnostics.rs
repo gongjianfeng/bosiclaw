@@ -1,3 +1,4 @@
+use crate::commands::config;
 use crate::models::{AITestResult, ChannelTestResult, DiagnosticResult, SystemInfo};
 use crate::utils::{platform, shell};
 use log::{debug, info, warn};
@@ -91,6 +92,13 @@ pub async fn run_doctor() -> Result<Vec<DiagnosticResult>, String> {
     info!("[诊断] 开始运行系统诊断...");
     let mut results = Vec::new();
     let runtime_mode = shell::get_runtime_mode();
+
+    if runtime_mode == "bundled" {
+        match config::ensure_local_gateway_config() {
+            Ok(_) => info!("[诊断] bundled 运行时配置已就绪"),
+            Err(error) => warn!("[诊断] bundled 运行时配置初始化失败: {}", error),
+        }
+    }
 
     // 检查 OpenClaw 是否安装
     info!("[诊断] 检查 OpenClaw 安装状态...");
