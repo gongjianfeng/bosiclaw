@@ -123,7 +123,7 @@ jobs:
           args: --target ${{ matrix.target }}
 
       - name: Verify bundled runtime
-        run: npm run verify:bundled-runtime -- --target ${{ matrix.target }} --platform ${{ runner.os }}
+        run: npm run verify:bundled-runtime -- --target ${{ matrix.target }} --platform ${{ runner.os }} --smoke
 
       # ── 上传构建产物 ─────────────────────────────────────
       - name: Upload artifacts

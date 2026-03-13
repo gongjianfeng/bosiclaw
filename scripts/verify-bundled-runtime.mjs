@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -160,6 +161,19 @@ function resolveOpenClawEntry(runtimeDir) {
   ]);
 }
 
+function resolveOpenClawPackageRoot(openclawEntry) {
+  if (basename(openclawEntry) === 'openclaw.mjs') {
+    return dirname(openclawEntry);
+  }
+
+  const distDir = dirname(openclawEntry);
+  if (basename(distDir) === 'dist') {
+    return dirname(distDir);
+  }
+
+  return dirname(openclawEntry);
+}
+
 function getReleaseDirCandidates(target) {
   const candidates = [];
   if (target) {
@@ -222,19 +236,70 @@ function verifyRuntimeLayout(runtimeDir, platform, label) {
   console.log(`  node: ${nodeExecutable}`);
   console.log(`  openclaw: ${openclawEntry}`);
   console.log(`  versions: node=${manifest.nodeVersion}, openclaw=${manifest.openclawVersion}`);
+
+  return { manifest, nodeExecutable, openclawEntry };
+}
+
+function smokeTestRuntime(runtimeDir, platform, label, runtimeInfo) {
+  const { manifest, nodeExecutable, openclawEntry } = runtimeInfo;
+  const packageRoot = resolveOpenClawPackageRoot(openclawEntry);
+  const env = { ...process.env };
+
+  delete env.OPENCLAW_HOME;
+  delete env.OPENCLAW_STATE_DIR;
+  delete env.OPENCLAW_CONFIG_PATH;
+
+  const result = spawnSync(nodeExecutable, [openclawEntry, '--version'], {
+    cwd: packageRoot,
+    env,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
+
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `${label} smoke test 失败`,
+        `runtime: ${runtimeDir}`,
+        `command: ${nodeExecutable} ${openclawEntry} --version`,
+        result.stdout?.trim(),
+        result.stderr?.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n')
+    );
+  }
+
+  const stdout = result.stdout?.trim() ?? '';
+  if (!stdout.includes(manifest.openclawVersion)) {
+    throw new Error(
+      `${label} smoke test 输出未包含期望的 OpenClaw 版本 ${manifest.openclawVersion}: ${stdout}`
+    );
+  }
+
+  console.log(`[verify] ${label} smoke test`);
+  console.log(`  command: ${nodeExecutable} ${basename(openclawEntry)} --version`);
+  console.log(`  stdout: ${stdout}`);
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const target = args.target ?? '';
   const platform = normalizePlatform(args.platform);
+  const smoke = args.smoke === 'true';
 
   const releaseRuntimeDir = getRuntimeDir(target);
-  verifyRuntimeLayout(releaseRuntimeDir, platform, 'release runtime');
+  const releaseRuntime = verifyRuntimeLayout(releaseRuntimeDir, platform, 'release runtime');
+  if (smoke) {
+    smokeTestRuntime(releaseRuntimeDir, platform, 'release runtime', releaseRuntime);
+  }
 
   if (platform === 'macos') {
     const appRuntimeDir = getMacAppRuntimeDir(target);
-    verifyRuntimeLayout(appRuntimeDir, platform, 'macOS app resources');
+    const appRuntime = verifyRuntimeLayout(appRuntimeDir, platform, 'macOS app resources');
+    if (smoke) {
+      smokeTestRuntime(appRuntimeDir, platform, 'macOS app resources', appRuntime);
+    }
   }
 
   console.log('[verify] bundled runtime 检查通过');
