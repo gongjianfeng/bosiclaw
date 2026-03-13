@@ -299,7 +299,6 @@ export HOMEBREW_API_DOMAIN="$OPENCLAW_HOMEBREW_API_DOMAIN"
 fn macos_node_install_script_body() -> String {
     format!(
         r#"
-set -e
 {homebrew_mirror_exports}
 
 ensure_brew_env() {{
@@ -310,7 +309,34 @@ ensure_brew_env() {{
     fi
 }}
 
-if ! command -v brew &> /dev/null; then
+# 通过 fnm 安装 Node.js（不需要管理员权限）
+install_node_via_fnm() {{
+    echo "使用 fnm 安装 Node.js（无需管理员权限）..."
+
+    if ! command -v fnm &> /dev/null; then
+        echo "正在安装 fnm..."
+        curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
+        # 加载 fnm 到当前 shell
+        export FNM_DIR="${{FNM_DIR:-$HOME/.local/share/fnm}}"
+        if [[ ! -d "$FNM_DIR" ]]; then
+            export FNM_DIR="$HOME/.fnm"
+        fi
+        export PATH="$FNM_DIR:$PATH"
+        eval "$(fnm env)"
+    fi
+
+    fnm install 22
+    fnm use 22
+    fnm default 22
+    eval "$(fnm env)"
+}}
+
+BREW_OK=false
+
+# 尝试 Homebrew 方式
+if command -v brew &> /dev/null; then
+    BREW_OK=true
+else
     echo "正在通过国内镜像安装 Homebrew..."
     install_dir="$(mktemp -d /tmp/openclaw-homebrew-install.XXXXXX)"
     cleanup() {{
@@ -318,27 +344,45 @@ if ! command -v brew &> /dev/null; then
     }}
     trap cleanup EXIT
 
-    if git clone --depth=1 "$OPENCLAW_HOMEBREW_INSTALL_GIT_REMOTE" "$install_dir"; then
-        NONINTERACTIVE=1 /bin/bash "$install_dir/install.sh"
+    if git clone --depth=1 "$OPENCLAW_HOMEBREW_INSTALL_GIT_REMOTE" "$install_dir" 2>/dev/null; then
+        if NONINTERACTIVE=1 /bin/bash "$install_dir/install.sh" 2>&1; then
+            BREW_OK=true
+        else
+            echo "Homebrew 安装失败（可能缺少管理员权限），将使用 fnm 替代..."
+        fi
     else
-        echo "镜像安装脚本拉取失败，回退官方源..."
+        echo "镜像安装脚本拉取失败，尝试官方源..."
         rm -rf "$install_dir"
         install_dir="$(mktemp -d /tmp/openclaw-homebrew-install.XXXXXX)"
-        git clone --depth=1 https://github.com/Homebrew/install.git "$install_dir"
-        NONINTERACTIVE=1 /bin/bash "$install_dir/install.sh"
+        if git clone --depth=1 https://github.com/Homebrew/install.git "$install_dir" 2>/dev/null; then
+            if NONINTERACTIVE=1 /bin/bash "$install_dir/install.sh" 2>&1; then
+                BREW_OK=true
+            else
+                echo "Homebrew 安装失败（可能缺少管理员权限），将使用 fnm 替代..."
+            fi
+        fi
     fi
 fi
 
-ensure_brew_env
+if [[ "$BREW_OK" == "true" ]]; then
+    ensure_brew_env
 
-echo "正在安装 Node.js 22..."
-if ! brew install node@22; then
-    echo "镜像源安装失败，回退官方 Homebrew 源重试..."
-    unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_CORE_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
-    brew install node@22
+    echo "正在通过 Homebrew 安装 Node.js 22..."
+    if ! brew install node@22; then
+        echo "镜像源安装失败，回退官方 Homebrew 源重试..."
+        unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_CORE_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN HOMEBREW_API_DOMAIN
+        if ! brew install node@22; then
+            echo "Homebrew 安装 Node.js 失败，回退到 fnm..."
+            install_node_via_fnm
+        fi
+    fi
+
+    # brew link 可能也需要权限，失败则忽略
+    brew link --overwrite node@22 2>/dev/null || true
+else
+    install_node_via_fnm
 fi
 
-brew link --overwrite node@22
 node --version
 "#,
         homebrew_mirror_exports = unix_homebrew_mirror_exports(),
