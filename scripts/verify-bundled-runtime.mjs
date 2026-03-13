@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 const targetRoot = join(repoRoot, 'src-tauri', 'target');
+const bundledRuntimeConfigPath = join(repoRoot, 'bundled-runtime.config.json');
+const nodeVersionFilePath = join(repoRoot, '.nvmrc');
 
 function parseArgs(argv) {
   const options = {};
@@ -94,6 +96,49 @@ function readManifest(runtimeDir) {
   return { manifest, manifestPath };
 }
 
+function readJsonIfExists(path) {
+  if (!existsSync(path)) {
+    return null;
+  }
+
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function readTextIfExists(path) {
+  if (!existsSync(path)) {
+    return '';
+  }
+
+  return readFileSync(path, 'utf8').trim();
+}
+
+function normalizeNodeVersion(value) {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
+}
+
+function assertPinnedVersions(manifest, manifestPath) {
+  const bundledRuntimeConfig = readJsonIfExists(bundledRuntimeConfigPath) ?? {};
+  const pinnedNodeVersion = normalizeNodeVersion(readTextIfExists(nodeVersionFilePath));
+  const pinnedOpenclawVersion = bundledRuntimeConfig.openclawVersion ?? '';
+
+  if (pinnedNodeVersion && manifest.nodeVersion !== pinnedNodeVersion) {
+    throw new Error(
+      `runtime manifest Node 版本不匹配，期望 ${pinnedNodeVersion}，实际 ${manifest.nodeVersion}: ${manifestPath}`
+    );
+  }
+
+  if (pinnedOpenclawVersion && manifest.openclawVersion !== pinnedOpenclawVersion) {
+    throw new Error(
+      `runtime manifest OpenClaw 版本不匹配，期望 ${pinnedOpenclawVersion}，实际 ${manifest.openclawVersion}: ${manifestPath}`
+    );
+  }
+}
+
 function resolveNodeExecutable(runtimeDir, platform) {
   if (platform === 'windows') {
     return firstExisting([
@@ -159,6 +204,7 @@ function getMacAppRuntimeDir(target) {
 
 function verifyRuntimeLayout(runtimeDir, platform, label) {
   const { manifest, manifestPath } = readManifest(runtimeDir);
+  assertPinnedVersions(manifest, manifestPath);
   const nodeExecutable = resolveNodeExecutable(runtimeDir, platform);
   const openclawEntry = resolveOpenClawEntry(runtimeDir);
 

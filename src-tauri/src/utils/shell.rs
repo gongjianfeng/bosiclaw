@@ -14,6 +14,12 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+const BUNDLED_RUNTIME_BLOCKED_ENV_KEYS: [&str; 3] = [
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+];
+
 #[derive(Debug, Clone)]
 enum NodeRuntime {
     Bundled { root: PathBuf, path: PathBuf },
@@ -296,13 +302,32 @@ fn resolve_openclaw_runtime() -> Option<OpenClawRuntime> {
         .or_else(resolve_system_openclaw_runtime)
 }
 
+fn resolve_bundled_openclaw_cwd(runtime: &BundledOpenClawRuntime) -> PathBuf {
+    let config_dir = PathBuf::from(platform::get_config_dir());
+    if config_dir.exists() {
+        return config_dir;
+    }
+
+    if let Some(home_dir) = dirs::home_dir() {
+        return home_dir;
+    }
+
+    runtime.package_root.clone()
+}
+
+fn is_bundled_runtime_blocked_env_key(key: &str) -> bool {
+    BUNDLED_RUNTIME_BLOCKED_ENV_KEYS
+        .iter()
+        .any(|blocked| blocked.eq_ignore_ascii_case(key))
+}
+
 fn build_openclaw_command(runtime: &OpenClawRuntime, args: &[&str]) -> Command {
     let mut command = match runtime {
         OpenClawRuntime::Bundled(runtime) => {
             let mut command = Command::new(&runtime.node_path);
             command
                 .arg(&runtime.entry_path)
-                .current_dir(&runtime.package_root);
+                .current_dir(resolve_bundled_openclaw_cwd(runtime));
             command
         }
         OpenClawRuntime::System(runtime) => {
@@ -319,6 +344,13 @@ fn build_openclaw_command(runtime: &OpenClawRuntime, args: &[&str]) -> Command {
 
     command.args(args);
     apply_common_env(&mut command);
+
+    if matches!(runtime, OpenClawRuntime::Bundled(_)) {
+        for key in BUNDLED_RUNTIME_BLOCKED_ENV_KEYS {
+            command.env_remove(key);
+        }
+    }
+
     command
 }
 
@@ -770,6 +802,12 @@ pub fn spawn_openclaw_gateway() -> io::Result<()> {
     let mut command = build_openclaw_command(&runtime, &["gateway", "--port", "18789"]);
 
     for (key, value) in load_openclaw_env_vars() {
+        if matches!(runtime, OpenClawRuntime::Bundled(_))
+            && is_bundled_runtime_blocked_env_key(&key)
+        {
+            info!("[Shell] bundled 模式忽略环境变量: {}", key);
+            continue;
+        }
         command.env(key, value);
     }
 
@@ -810,6 +848,19 @@ pub fn spawn_openclaw_gateway() -> io::Result<()> {
                 format!("启动失败 (运行时: {}): {}", runtime.display_path(), error),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_runtime_blocks_path_override_env_keys() {
+        assert!(is_bundled_runtime_blocked_env_key("OPENCLAW_HOME"));
+        assert!(is_bundled_runtime_blocked_env_key("openclaw_state_dir"));
+        assert!(is_bundled_runtime_blocked_env_key("OPENCLAW_CONFIG_PATH"));
+        assert!(!is_bundled_runtime_blocked_env_key("OPENAI_API_KEY"));
+    }
 }
 
 /// 检查命令是否存在

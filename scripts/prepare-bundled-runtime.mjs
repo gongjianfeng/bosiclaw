@@ -10,6 +10,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 const runtimeDir = resolve(repoRoot, 'src-tauri', 'runtime');
 const manifestPath = join(runtimeDir, 'manifest.json');
+const bundledRuntimeConfigPath = join(repoRoot, 'bundled-runtime.config.json');
+const nodeVersionFilePath = join(repoRoot, '.nvmrc');
 
 function parseArgs(argv) {
   const options = {};
@@ -102,6 +104,31 @@ function readPackageVersion(packageRoot) {
   return packageJson.version ?? 'unknown';
 }
 
+function readJsonIfExists(path) {
+  if (!existsSync(path)) {
+    return null;
+  }
+
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function readTextIfExists(path) {
+  if (!existsSync(path)) {
+    return '';
+  }
+
+  return readFileSync(path, 'utf8').trim();
+}
+
+function normalizeNodeVersion(version) {
+  const trimmed = String(version ?? '').trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
+}
+
 function getDefaultStagingPrefix() {
   if (process.platform === 'win32') {
     return join(process.env.RUNNER_TEMP ?? process.env.TEMP ?? process.env.TMP ?? tmpdir(), 'ocrt');
@@ -153,10 +180,15 @@ function quoteForWindowsCmd(value) {
 }
 
 function main() {
+  const bundledRuntimeConfig = readJsonIfExists(bundledRuntimeConfigPath) ?? {};
+  const pinnedNodeVersion = normalizeNodeVersion(readTextIfExists(nodeVersionFilePath));
   const args = parseArgs(process.argv.slice(2));
   const nodeBin = args['node-bin'] ?? process.env.BOSICLAW_NODE_BIN ?? process.execPath;
   const openclawVersion =
-    args['openclaw-version'] ?? process.env.OPENCLAW_VERSION ?? 'latest';
+    args['openclaw-version'] ??
+    process.env.OPENCLAW_VERSION ??
+    bundledRuntimeConfig.openclawVersion ??
+    'latest';
   const packageRootArg =
     args['openclaw-package-root'] ?? process.env.OPENCLAW_PACKAGE_ROOT ?? '';
   const stagingPrefix =
@@ -171,6 +203,16 @@ function main() {
   const nodeRoot = resolveNodeRoot(nodeBin);
   if (!existsSync(nodeRoot)) {
     throw new Error(`找不到 Node 运行时目录: ${nodeRoot}`);
+  }
+
+  const actualNodeVersion = run(resolve(nodeBin), ['--version']);
+  const skipNodeVersionCheck =
+    args['skip-node-version-check'] === 'true' ||
+    process.env.BOSICLAW_SKIP_NODE_VERSION_CHECK === 'true';
+  if (pinnedNodeVersion && !skipNodeVersionCheck && actualNodeVersion !== pinnedNodeVersion) {
+    throw new Error(
+      `当前 Node 版本 ${actualNodeVersion} 与项目固定版本 ${pinnedNodeVersion} 不一致，请先切换 Node 版本后再准备 bundled runtime。`
+    );
   }
 
   let packageRoot = packageRootArg ? resolve(packageRootArg) : '';
@@ -221,11 +263,13 @@ function main() {
 
   const manifest = {
     generatedAt: new Date().toISOString(),
-    nodeVersion: run(resolve(nodeBin), ['--version']),
+    nodeVersion: actualNodeVersion,
     openclawVersion: readPackageVersion(packageRoot),
     runtimeLayoutVersion: 1,
     targetPlatform: process.platform,
     targetArch: process.arch,
+    pinnedNodeVersion: pinnedNodeVersion || null,
+    pinnedOpenclawVersion: bundledRuntimeConfig.openclawVersion ?? null,
     paths: {
       nodeRoot: 'tools/node',
       openclawPackageRoot: 'lib/node_modules/openclaw',

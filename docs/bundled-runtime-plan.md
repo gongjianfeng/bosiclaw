@@ -27,6 +27,7 @@ src-tauri/runtime/
 ## 构建流程
 
 1. 在目标平台准备 Node 22+/24+ 构建环境。
+   当前仓库用 `.nvmrc` 固定 bundled Node 版本，用 `bundled-runtime.config.json` 固定 OpenClaw 版本。
 2. macOS 需要分别产出 `x86_64-apple-darwin` 与 `aarch64-apple-darwin` 安装包，不能继续依赖单个 universal 包复用同一份 Node/OpenClaw runtime。
 3. Windows 产物建议显式启用离线 WebView2 安装器，避免首次安装依赖外网下载。
 4. 执行 `npm run prepare:bundled-runtime`。
