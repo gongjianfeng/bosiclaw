@@ -1,7 +1,38 @@
 use crate::models::{AITestResult, ChannelTestResult, DiagnosticResult, SystemInfo};
 use crate::utils::{platform, shell};
 use log::{debug, info, warn};
+use std::cmp::Ordering;
 use tauri::command;
+
+const MINIMUM_NODE_VERSION: &str = "22.16.0";
+
+fn normalize_version(value: &str) -> String {
+    value.trim().trim_start_matches('v').to_string()
+}
+
+fn parse_semver(value: &str) -> Option<(u32, u32, u32)> {
+    let cleaned = normalize_version(value);
+    let core = cleaned.split(['-', '+']).next().unwrap_or(&cleaned);
+    let mut parts = core.split('.');
+
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next().unwrap_or("0").parse::<u32>().ok()?;
+    let patch = parts.next().unwrap_or("0").parse::<u32>().ok()?;
+
+    Some((major, minor, patch))
+}
+
+fn compare_semver(left: &str, right: &str) -> Option<Ordering> {
+    let left = parse_semver(left)?;
+    let right = parse_semver(right)?;
+    Some(left.cmp(&right))
+}
+
+fn node_version_meets_requirement(version: &str) -> bool {
+    compare_semver(version, MINIMUM_NODE_VERSION)
+        .map(|ordering| ordering != Ordering::Less)
+        .unwrap_or(false)
+}
 
 /// 去除 ANSI 转义序列（颜色代码等）
 fn strip_ansi_codes(input: &str) -> String {
@@ -119,14 +150,24 @@ pub async fn run_doctor() -> Result<Vec<DiagnosticResult>, String> {
     } else {
         shell::run_command_output("node", &["--version"])
     };
+    let node_ok = node_check
+        .as_ref()
+        .map(|version| node_version_meets_requirement(version))
+        .unwrap_or(false);
     results.push(DiagnosticResult {
         name: "Node.js".to_string(),
-        passed: node_check.is_ok(),
-        message: node_check.clone().unwrap_or_else(|_| "未安装".to_string()),
-        suggestion: if node_check.is_err() {
-            Some("请安装 Node.js 22+".to_string())
-        } else {
+        passed: node_ok,
+        message: match &node_check {
+            Ok(version) if node_ok => version.clone(),
+            Ok(version) => format!("{} (需要 >= v22.16.0)", version),
+            Err(_) => "未安装".to_string(),
+        },
+        suggestion: if node_ok {
             None
+        } else if node_check.is_err() {
+            Some("请安装 Node.js v22.16.0+".to_string())
+        } else {
+            Some("请升级 Node.js 到 v22.16.0+，然后重新检查".to_string())
         },
     });
 

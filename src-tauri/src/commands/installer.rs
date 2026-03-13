@@ -1,6 +1,7 @@
 use crate::utils::{platform, shell};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,8 +14,8 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-const REQUIRED_NODE_MAJOR: u32 = 22;
-const MANAGED_NODE_VERSION: &str = "22.13.1";
+const MINIMUM_NODE_VERSION: &str = "22.16.0";
+const MANAGED_NODE_VERSION: &str = "22.22.1";
 const MANAGED_GIT_VERSION: &str = "2.44.0.windows.1";
 const NPM_REGISTRY_MIRROR: &str = "https://registry.npmmirror.com";
 const DEFAULT_GITHUB_PROXY: &str = "https://gh-proxy.com";
@@ -27,7 +28,7 @@ pub struct EnvironmentStatus {
     pub node_installed: bool,
     /// Node.js 版本
     pub node_version: Option<String>,
-    /// Node.js 版本是否满足要求 (>=22)
+    /// Node.js 版本是否满足要求 (>=22.16.0)
     pub node_version_ok: bool,
     /// OpenClaw 是否安装
     pub openclaw_installed: bool,
@@ -105,7 +106,71 @@ fn normalize_version(value: &str) -> String {
 }
 
 fn required_node_version_hint() -> String {
-    format!("v{}+", REQUIRED_NODE_MAJOR)
+    format!("v{}+", MINIMUM_NODE_VERSION)
+}
+
+fn parse_semver(value: &str) -> Option<(u32, u32, u32)> {
+    let cleaned = normalize_version(value);
+    let core = cleaned.split(['-', '+']).next().unwrap_or(&cleaned);
+    let mut parts = core.split('.');
+
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next().unwrap_or("0").parse::<u32>().ok()?;
+    let patch = parts.next().unwrap_or("0").parse::<u32>().ok()?;
+
+    Some((major, minor, patch))
+}
+
+fn compare_semver(left: &str, right: &str) -> Option<Ordering> {
+    let left = parse_semver(left)?;
+    let right = parse_semver(right)?;
+    Some(left.cmp(&right))
+}
+
+fn version_meets_requirement(version: &str, minimum: &str) -> bool {
+    compare_semver(version, minimum)
+        .map(|ordering| ordering != Ordering::Less)
+        .unwrap_or(false)
+}
+
+fn read_node_binary_version(node_path: &Path) -> Option<String> {
+    let node_path = node_path.to_str()?;
+    match run_node_command(node_path, &["--version"]) {
+        Ok(version) => {
+            let version = version.trim().to_string();
+            if version.is_empty() {
+                None
+            } else {
+                Some(version)
+            }
+        }
+        Err(err) => {
+            warn!(
+                "[安装Node.js] 读取托管 Node 版本失败 {}: {}",
+                node_path, err
+            );
+            None
+        }
+    }
+}
+
+fn managed_node_runtime_is_current(node_path: &Path) -> bool {
+    if let Some(version) = read_node_binary_version(node_path) {
+        if version_meets_requirement(&version, MANAGED_NODE_VERSION) {
+            info!(
+                "[安装Node.js] 托管 Node 运行时已是最新要求版本: {}",
+                version
+            );
+            return true;
+        }
+
+        warn!(
+            "[安装Node.js] 检测到过期托管 Node 运行时: {}，目标版本至少为 {}，准备升级",
+            version, MANAGED_NODE_VERSION
+        );
+    }
+
+    false
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -375,7 +440,8 @@ fn macos_node_archive_url() -> Option<String> {
 }
 
 fn ensure_windows_node_runtime(paths: &ManagedInstallPaths) -> Result<(), String> {
-    if paths.node_dir.join("node.exe").exists() {
+    let node_path = paths.node_dir.join("node.exe");
+    if node_path.exists() && managed_node_runtime_is_current(&node_path) {
         return Ok(());
     }
 
@@ -420,7 +486,8 @@ fn ensure_windows_git_runtime(paths: &ManagedInstallPaths) -> Result<(), String>
 }
 
 fn ensure_macos_node_runtime(paths: &ManagedInstallPaths) -> Result<(), String> {
-    if paths.node_dir.join("bin").join("node").exists() {
+    let node_path = paths.node_dir.join("bin").join("node");
+    if node_path.exists() && managed_node_runtime_is_current(&node_path) {
         return Ok(());
     }
 
@@ -886,19 +953,12 @@ fn get_openclaw_version() -> Option<String> {
         .map(|v| v.trim().to_string())
 }
 
-/// 检查 Node.js 版本是否 >= 22
+/// 检查 Node.js 版本是否 >= 22.16.0
 fn check_node_version_requirement(version: &Option<String>) -> bool {
-    if let Some(v) = version {
-        // 解析版本号 "v22.1.0" -> 22
-        let major = normalize_version(v)
-            .split('.')
-            .next()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
-        major >= REQUIRED_NODE_MAJOR
-    } else {
-        false
-    }
+    version
+        .as_deref()
+        .map(|v| version_meets_requirement(v, MINIMUM_NODE_VERSION))
+        .unwrap_or(false)
 }
 
 /// 安装 Node.js
@@ -1057,7 +1117,23 @@ node --version
     match shell::run_bash_output(script) {
         Ok(output) => {
             configure_user_npm_registry();
-            Ok(install_success(format!("Node.js 安装成功！{}", output)))
+            match get_node_version() {
+                Some(version) if check_node_version_requirement(&Some(version.clone())) => {
+                    Ok(install_success(format!("Node.js 安装成功！{}", output)))
+                }
+                Some(version) => Ok(install_failure(
+                    "Node.js 安装完成但版本不满足要求",
+                    format!(
+                        "当前版本 {}，需要 {}",
+                        version,
+                        required_node_version_hint()
+                    ),
+                )),
+                None => Ok(install_failure(
+                    "Node.js 安装失败",
+                    "安装脚本执行完成，但仍未检测到可用的 Node.js".to_string(),
+                )),
+            }
         }
         Err(e) => Ok(install_failure("Node.js 安装失败", e)),
     }
@@ -1428,7 +1504,7 @@ echo ""
 echo "当前版本已改为应用内托管安装 OpenClaw，并优先使用 npmmirror。"
 echo "此脚本会将 OpenClaw 安装到应用托管目录，不依赖全局 PATH。"
 echo "如果自动安装失败，请确认："
-echo "1. Node.js 已安装且版本 >= {required_node_major}"
+echo "1. Node.js 已安装且版本 >= {required_node_version}"
 echo "{git_hint}"
 echo ""
 
@@ -1467,16 +1543,26 @@ EOF
 check_node_version() {{
   if ! command -v node >/dev/null 2>&1; then
     echo ""
-    echo "未检测到 Node.js。请先在应用内安装 Node.js，或手动安装 Node {required_node_major}+ 后重试。"
+    echo "未检测到 Node.js。请先在应用内安装 Node.js，或手动安装 Node {required_node_version_hint} 后重试。"
     return 1
   fi
 
-  local version major
+  local version core major minor patch
   version="$(node --version 2>/dev/null || true)"
-  major="$(printf '%s' "$version" | sed 's/^v//' | cut -d. -f1)"
-  if [ -z "$major" ] || [ "$major" -lt {required_node_major} ]; then
+  core="$(printf '%s' "$version" | sed 's/^v//' | cut -d- -f1 | cut -d+ -f1)"
+  major="$(printf '%s' "$core" | cut -d. -f1)"
+  minor="$(printf '%s' "$core" | cut -d. -f2)"
+  patch="$(printf '%s' "$core" | cut -d. -f3)"
+
+  major="${{major:-0}}"
+  minor="${{minor:-0}}"
+  patch="${{patch:-0}}"
+
+  if [ "$major" -lt {required_node_major} ] || \
+     {{ [ "$major" -eq {required_node_major} ] && [ "$minor" -lt {required_node_minor} ]; }} || \
+     {{ [ "$major" -eq {required_node_major} ] && [ "$minor" -eq {required_node_minor} ] && [ "$patch" -lt {required_node_patch} ]; }}; then
     echo ""
-    echo "当前 Node.js 版本为 $version，需要 >= v{required_node_major}。"
+    echo "当前 Node.js 版本为 $version，需要 >= {required_node_version_hint}。"
     return 1
   fi
 }}
@@ -1599,7 +1685,15 @@ echo "安装位置: $OPENCLAW_BIN"
 echo ""
 read -p "按回车键关闭此窗口..."
 "#,
-        required_node_major = REQUIRED_NODE_MAJOR,
+        required_node_major = parse_semver(MINIMUM_NODE_VERSION)
+            .map(|v| v.0)
+            .unwrap_or(22),
+        required_node_minor = parse_semver(MINIMUM_NODE_VERSION)
+            .map(|v| v.1)
+            .unwrap_or(16),
+        required_node_patch = parse_semver(MINIMUM_NODE_VERSION).map(|v| v.2).unwrap_or(0),
+        required_node_version = MINIMUM_NODE_VERSION,
+        required_node_version_hint = required_node_version_hint(),
         git_hint = git_hint,
         runtime_dir = shell_single_quote(&paths.runtime_dir.display().to_string()),
         app_dir = shell_single_quote(&paths.app_dir.display().to_string()),
