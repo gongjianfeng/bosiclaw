@@ -172,6 +172,30 @@ function walkFiles(root) {
   return files;
 }
 
+function walkDirectories(root) {
+  const pending = [root];
+  const directories = [];
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || !existsSync(current)) {
+      continue;
+    }
+
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      const entryPath = join(current, entry.name);
+      directories.push(entryPath);
+      pending.push(entryPath);
+    }
+  }
+
+  return directories;
+}
+
 function getPathSize(path) {
   if (!existsSync(path)) {
     return 0;
@@ -202,6 +226,16 @@ function pruneOpenClawPackage(packageRoot) {
     join(packageRoot, 'README-header.png'),
     join(packageRoot, 'CHANGELOG.md'),
   ];
+  const removableDependencyDirectoryNames = new Set([
+    'test',
+    'tests',
+    'doc',
+    'docs',
+    'example',
+    'examples',
+    'benchmark',
+    'benchmarks',
+  ]);
   const removableFilePattern = /\.(d\.[cm]?ts|map|md|mdx)$/iu;
 
   let removedFiles = 0;
@@ -231,6 +265,22 @@ function pruneOpenClawPackage(packageRoot) {
 
     removedFiles += 1;
     removedBytes += removePackagedPath(file);
+  }
+
+  const dependenciesRoot = join(packageRoot, 'node_modules');
+  if (existsSync(dependenciesRoot)) {
+    const nestedRemovableDirectories = walkDirectories(dependenciesRoot)
+      .filter((directory) => removableDependencyDirectoryNames.has(basename(directory)))
+      .sort((left, right) => right.length - left.length);
+
+    for (const directory of nestedRemovableDirectories) {
+      if (!existsSync(directory)) {
+        continue;
+      }
+
+      removedFiles += walkFiles(directory).length;
+      removedBytes += removePackagedPath(directory);
+    }
   }
 
   return { removedFiles, removedBytes };
