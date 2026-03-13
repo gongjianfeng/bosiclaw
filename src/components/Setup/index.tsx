@@ -127,9 +127,10 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
         await checkEnvironment();
       } else {
         setupLogger.warn('自动安装失败，打开终端手动安装');
+        const errorDetail = result.error || result.message;
         // 打开终端手动安装
         await invoke<string>('open_install_terminal', { installType: 'openclaw' });
-        setError('已打开安装终端，请在终端中完成安装后点击"重新检查"');
+        setError(`自动安装失败：${errorDetail}。已打开安装终端，请在终端中完成安装后点击"重新检查"`);
       }
     } catch (e) {
       setupLogger.error('安装失败，尝试打开终端', e);

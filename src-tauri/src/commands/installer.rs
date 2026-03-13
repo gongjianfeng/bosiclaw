@@ -108,6 +108,10 @@ fn required_node_version_hint() -> String {
     format!("v{}+", REQUIRED_NODE_MAJOR)
 }
 
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 fn get_github_proxy() -> Option<String> {
     match std::env::var("OPENCLAW_GITHUB_PROXY") {
         Ok(value) => {
@@ -533,7 +537,11 @@ fn configure_user_npm_registry() {
 
 fn ensure_git_available_for_install() -> Result<(), String> {
     if platform::is_windows() {
-        if shell::get_managed_git_path().is_some() || shell::command_exists("git") {
+        if let Some(path) = shell::get_managed_git_path() {
+            return run_process(&path, &["--version"], None, &[]).map(|_| ());
+        }
+
+        if shell::run_command_output("git", &["--version"]).is_ok() {
             return Ok(());
         }
 
@@ -543,7 +551,7 @@ fn ensure_git_available_for_install() -> Result<(), String> {
         );
     }
 
-    if shell::command_exists("git") {
+    if shell::run_command_output("git", &["--version"]).is_ok() {
         Ok(())
     } else if platform::is_macos() {
         Err("当前 macOS 未检测到 Git。请先运行 xcode-select --install，或自行安装 Git / Homebrew 后重试。".to_string())
@@ -1116,10 +1124,23 @@ async fn install_openclaw_windows() -> Result<InstallResult, String> {
 
 /// Unix 系统安装 OpenClaw
 async fn install_openclaw_unix() -> Result<InstallResult, String> {
-    if get_node_version().is_none() {
+    let node_version = get_node_version();
+    if node_version.is_none() {
         return Ok(install_failure(
             "OpenClaw 安装失败",
             format!("请先安装 Node.js {}", required_node_version_hint()),
+        ));
+    }
+
+    if !check_node_version_requirement(&node_version) {
+        let current = node_version.unwrap_or_else(|| "未知版本".to_string());
+        return Ok(install_failure(
+            "OpenClaw 安装失败",
+            format!(
+                "当前 Node.js 版本为 {}，需要 {}",
+                current,
+                required_node_version_hint()
+            ),
         ));
     }
 
@@ -1339,36 +1360,7 @@ Read-Host "按回车键关闭此窗口"
         shell::run_powershell_output(script)?;
         Ok("已打开安装终端".to_string())
     } else if platform::is_macos() {
-        let script_content = r#"#!/bin/bash
-clear
-echo "========================================"
-echo "    OpenClaw 安装向导"
-echo "========================================"
-echo ""
-
-echo "当前版本已改为应用内托管安装 OpenClaw，并优先使用 npmmirror。"
-echo "如果自动安装失败，请确认："
-echo "1. Node.js 已安装且版本 >= 22"
-echo "2. git 可用（macOS 可执行 xcode-select --install）"
-echo ""
-echo "如需手动安装，可执行："
-echo "npm config set registry https://registry.npmmirror.com --location user"
-echo "npm install -g openclaw@latest --registry https://registry.npmmirror.com"
-
-echo ""
-echo "初始化配置..."
-openclaw config set gateway.mode local 2>/dev/null || true
-
-mkdir -p ~/.openclaw/agents/main/sessions
-mkdir -p ~/.openclaw/agents/main/agent
-mkdir -p ~/.openclaw/credentials
-
-echo ""
-echo "安装完成！"
-openclaw --version
-echo ""
-read -p "按回车键关闭此窗口..."
-"#;
+        let script_content = build_unix_openclaw_install_terminal_script(true);
 
         let script_path = "/tmp/openclaw_install_openclaw.command";
         std::fs::write(script_path, script_content).map_err(|e| format!("创建脚本失败: {}", e))?;
@@ -1386,34 +1378,7 @@ read -p "按回车键关闭此窗口..."
         Ok("已打开安装终端".to_string())
     } else {
         // Linux
-        let script_content = r#"#!/bin/bash
-clear
-echo "========================================"
-echo "    OpenClaw 安装向导"
-echo "========================================"
-echo ""
-
-echo "当前版本已改为应用内托管安装 OpenClaw，并优先使用 npmmirror。"
-echo "如果自动安装失败，请确认 Node.js 与 git 已安装。"
-echo ""
-echo "如需手动安装，可执行："
-echo "npm config set registry https://registry.npmmirror.com --location user"
-echo "npm install -g openclaw@latest --registry https://registry.npmmirror.com"
-
-echo ""
-echo "初始化配置..."
-openclaw config set gateway.mode local 2>/dev/null || true
-
-mkdir -p ~/.openclaw/agents/main/sessions
-mkdir -p ~/.openclaw/agents/main/agent
-mkdir -p ~/.openclaw/credentials
-
-echo ""
-echo "安装完成！"
-openclaw --version
-echo ""
-read -p "按回车键关闭..."
-"#;
+        let script_content = build_unix_openclaw_install_terminal_script(false);
 
         let script_path = "/tmp/openclaw_install_openclaw.sh";
         std::fs::write(script_path, script_content).map_err(|e| format!("创建脚本失败: {}", e))?;
@@ -1437,6 +1402,225 @@ read -p "按回车键关闭..."
 
         Err("无法启动终端，请手动运行: npm install -g openclaw@latest --registry https://registry.npmmirror.com".to_string())
     }
+}
+
+fn build_unix_openclaw_install_terminal_script(is_macos: bool) -> String {
+    let paths = ManagedInstallPaths::new();
+    let git_hint = if is_macos {
+        "2. git 可用（macOS 可执行 xcode-select --install）"
+    } else {
+        "2. git 可用"
+    };
+    let git_error = if is_macos {
+        "未检测到可用的 git。请先运行 xcode-select --install，或自行安装 Git 后重试。"
+    } else {
+        "未检测到可用的 git。请先安装 Git 后重试。"
+    };
+
+    format!(
+        r#"#!/bin/bash
+set -u
+clear
+echo "========================================"
+echo "    OpenClaw 安装向导"
+echo "========================================"
+echo ""
+echo "当前版本已改为应用内托管安装 OpenClaw，并优先使用 npmmirror。"
+echo "此脚本会将 OpenClaw 安装到应用托管目录，不依赖全局 PATH。"
+echo "如果自动安装失败，请确认："
+echo "1. Node.js 已安装且版本 >= {required_node_major}"
+echo "{git_hint}"
+echo ""
+
+RUNTIME_DIR={runtime_dir}
+APP_DIR={app_dir}
+NODE_BIN_DIR={node_bin_dir}
+OPENCLAW_BIN={openclaw_bin}
+NPM_CACHE_DIR={npm_cache_dir}
+NPMRC_PATH={npmrc_path}
+GIT_CONFIG_PATH={git_config_path}
+NPM_REGISTRY={npm_registry}
+DEFAULT_GITHUB_PROXY={default_proxy}
+INSTALL_RETRIES={install_retries}
+
+ensure_runtime_layout() {{
+  mkdir -p "$RUNTIME_DIR" "$APP_DIR" "$NPM_CACHE_DIR"
+
+  if [ ! -f "$APP_DIR/package.json" ]; then
+    cat > "$APP_DIR/package.json" <<'JSON'
+{{
+  "name": "openclaw-managed-runtime",
+  "version": "1.0.0",
+  "private": true
+}}
+JSON
+  fi
+
+  cat > "$NPMRC_PATH" <<EOF
+registry=$NPM_REGISTRY
+fund=false
+audit=false
+prefer-offline=true
+EOF
+}}
+
+check_node_version() {{
+  if ! command -v node >/dev/null 2>&1; then
+    echo ""
+    echo "未检测到 Node.js。请先在应用内安装 Node.js，或手动安装 Node {required_node_major}+ 后重试。"
+    return 1
+  fi
+
+  local version major
+  version="$(node --version 2>/dev/null || true)"
+  major="$(printf '%s' "$version" | sed 's/^v//' | cut -d. -f1)"
+  if [ -z "$major" ] || [ "$major" -lt {required_node_major} ]; then
+    echo ""
+    echo "当前 Node.js 版本为 $version，需要 >= v{required_node_major}。"
+    return 1
+  fi
+}}
+
+write_git_proxy_config() {{
+  local proxy="$1"
+  local target
+  if [ -n "$proxy" ]; then
+    target="${{proxy%/}}/https://github.com/"
+  else
+    target="https://github.com/"
+  fi
+
+  cat > "$GIT_CONFIG_PATH" <<EOF
+[url "$target"]
+    insteadOf = ssh://git@github.com/
+    insteadOf = git@github.com:
+    insteadOf = git://github.com/
+    insteadOf = https://github.com/
+EOF
+
+  export GIT_CONFIG_GLOBAL="$GIT_CONFIG_PATH"
+  export OPENCLAW_GIT_TARGET="$target"
+}}
+
+install_openclaw_route() {{
+  local label="$1"
+  local proxy="$2"
+  local attempt=1
+
+  write_git_proxy_config "$proxy"
+
+  while [ "$attempt" -le "$INSTALL_RETRIES" ]; do
+    echo ""
+    echo "[$label] 第 $attempt/$INSTALL_RETRIES 次尝试安装..."
+    if (cd "$APP_DIR" && npm install openclaw@latest --no-fund --no-audit); then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    if [ "$attempt" -le "$INSTALL_RETRIES" ]; then
+      sleep 2
+    fi
+  done
+
+  return 1
+}}
+
+ensure_runtime_layout
+
+if [ -d "$NODE_BIN_DIR" ]; then
+  export PATH="$NODE_BIN_DIR:$APP_DIR/node_modules/.bin:$PATH"
+else
+  export PATH="$APP_DIR/node_modules/.bin:$PATH"
+fi
+
+export npm_config_registry="$NPM_REGISTRY"
+export npm_config_cache="$NPM_CACHE_DIR"
+export npm_config_userconfig="$NPMRC_PATH"
+
+npm config set registry "$NPM_REGISTRY" --location user >/dev/null 2>&1 || true
+
+check_node_version || exit 1
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo ""
+  echo "未检测到 npm，请先确认 Node.js 安装完整。"
+  exit 1
+fi
+
+if ! git --version >/dev/null 2>&1; then
+  echo ""
+  echo "{git_error}"
+  exit 1
+fi
+
+echo "托管安装目录: $APP_DIR"
+echo ""
+
+GITHUB_PROXY="${{OPENCLAW_GITHUB_PROXY:-$DEFAULT_GITHUB_PROXY}}"
+case "$GITHUB_PROXY" in
+  none|NONE|direct|DIRECT)
+    GITHUB_PROXY=""
+    ;;
+esac
+
+INSTALL_OK=0
+if [ -n "$GITHUB_PROXY" ]; then
+  if install_openclaw_route "GitHub 代理" "$GITHUB_PROXY"; then
+    INSTALL_OK=1
+  else
+    echo ""
+    echo "代理安装失败，开始尝试直连 GitHub..."
+  fi
+fi
+
+if [ "$INSTALL_OK" -ne 1 ]; then
+  if install_openclaw_route "GitHub 直连" ""; then
+    INSTALL_OK=1
+  fi
+fi
+
+if [ "$INSTALL_OK" -ne 1 ] || [ ! -x "$OPENCLAW_BIN" ]; then
+  echo ""
+  echo "OpenClaw 安装失败，未在托管目录找到可执行文件："
+  echo "$OPENCLAW_BIN"
+  exit 1
+fi
+
+echo "初始化配置..."
+mkdir -p ~/.openclaw/agents/main/sessions
+mkdir -p ~/.openclaw/agents/main/agent
+mkdir -p ~/.openclaw/credentials
+chmod 700 ~/.openclaw 2>/dev/null || true
+"$OPENCLAW_BIN" config set gateway.mode local 2>/dev/null || true
+
+echo ""
+echo "安装完成！"
+echo "安装位置: $OPENCLAW_BIN"
+"$OPENCLAW_BIN" --version
+echo ""
+read -p "按回车键关闭此窗口..."
+"#,
+        required_node_major = REQUIRED_NODE_MAJOR,
+        git_hint = git_hint,
+        runtime_dir = shell_single_quote(&paths.runtime_dir.display().to_string()),
+        app_dir = shell_single_quote(&paths.app_dir.display().to_string()),
+        node_bin_dir = shell_single_quote(&paths.node_dir.join("bin").display().to_string()),
+        openclaw_bin = shell_single_quote(
+            &paths
+                .app_dir
+                .join("node_modules")
+                .join(".bin")
+                .join("openclaw")
+                .display()
+                .to_string(),
+        ),
+        npm_cache_dir = shell_single_quote(&paths.npm_cache_dir.display().to_string()),
+        npmrc_path = shell_single_quote(&paths.npmrc_path.display().to_string()),
+        git_config_path = shell_single_quote(&paths.git_config_path.display().to_string()),
+        npm_registry = shell_single_quote(NPM_REGISTRY_MIRROR),
+        default_proxy = shell_single_quote(DEFAULT_GITHUB_PROXY),
+        install_retries = OPENCLAW_INSTALL_RETRIES,
+        git_error = git_error,
+    )
 }
 
 /// 卸载 OpenClaw
