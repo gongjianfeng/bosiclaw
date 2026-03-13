@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Monitor, Package, Folder, CheckCircle, XCircle } from 'lucide-react';
+import { Monitor, Package, Folder, CheckCircle, XCircle, HardDrive } from 'lucide-react';
 import { api, SystemInfo as SystemInfoType, isTauri } from '../../lib/tauri';
 
 export function SystemInfo() {
@@ -34,6 +34,17 @@ export function SystemInfo() {
         return 'Linux';
       default:
         return os;
+    }
+  };
+
+  const getRuntimeLabel = (mode?: string) => {
+    switch (mode) {
+      case 'bundled':
+        return '内置运行时';
+      case 'system':
+        return '系统环境';
+      default:
+        return '未检测到';
     }
   };
 
@@ -85,6 +96,7 @@ export function SystemInfo() {
                 ? info.openclaw_version || '已安装'
                 : '未安装'}
             </p>
+            <p className="text-xs text-gray-500">{getRuntimeLabel(info?.runtime_mode)}</p>
           </div>
         </div>
 
@@ -96,6 +108,19 @@ export function SystemInfo() {
           <div className="flex-1">
             <p className="text-xs text-gray-500">Node.js</p>
             <p className="text-sm text-white">{info?.node_version || '--'}</p>
+          </div>
+        </div>
+
+        {/* 运行时根目录 */}
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-dark-500 flex items-center justify-center">
+            <HardDrive size={16} className="text-cyan-400" />
+          </div>
+          <div className="flex-1">
+            <p className="text-xs text-gray-500">运行时目录</p>
+            <p className="text-sm text-white font-mono text-xs truncate">
+              {info?.runtime_root || '--'}
+            </p>
           </div>
         </div>
 

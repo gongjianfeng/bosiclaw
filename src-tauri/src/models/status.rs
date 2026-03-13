@@ -47,6 +47,10 @@ pub struct SystemInfo {
     pub node_version: Option<String>,
     /// 配置目录
     pub config_dir: String,
+    /// 运行时模式：bundled / system / missing
+    pub runtime_mode: String,
+    /// 内置运行时根目录
+    pub runtime_root: Option<String>,
 }
 
 /// 诊断结果

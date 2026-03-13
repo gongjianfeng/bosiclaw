@@ -41,6 +41,8 @@ export interface SystemInfo {
   openclaw_version: string | null;
   node_version: string | null;
   config_dir: string;
+  runtime_mode: 'bundled' | 'system' | 'missing';
+  runtime_root: string | null;
 }
 
 // AI Provider 选项（旧版兼容）

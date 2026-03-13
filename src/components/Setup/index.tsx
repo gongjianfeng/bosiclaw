@@ -22,6 +22,8 @@ interface EnvironmentStatus {
   config_dir_exists: boolean;
   ready: boolean;
   os: string;
+  runtime_mode: 'bundled' | 'system' | 'missing';
+  runtime_root: string | null;
 }
 
 interface InstallResult {
@@ -153,6 +155,17 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
     }
   };
 
+  const getRuntimeLabel = (mode: EnvironmentStatus['runtime_mode']) => {
+    switch (mode) {
+      case 'bundled':
+        return '内置';
+      case 'system':
+        return '系统';
+      default:
+        return '未找到';
+    }
+  };
+
   // 渲染安装内容（复用于嵌入模式和全屏模式）
   const renderContent = () => {
     return (
@@ -201,7 +214,7 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
                   <p className="text-white font-medium">Node.js</p>
                   <p className="text-sm text-dark-400">
                     {envStatus.node_version
-                      ? `${envStatus.node_version} ${envStatus.node_version_ok ? '✓' : '(需要 v22+)'}`
+                      ? `${envStatus.node_version} · ${getRuntimeLabel(envStatus.runtime_mode)} ${envStatus.node_version_ok ? '✓' : '(需要 v22+)'}`
                       : '未安装'}
                   </p>
                 </div>
@@ -242,7 +255,9 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
                 <div>
                   <p className="text-white font-medium">OpenClaw</p>
                   <p className="text-sm text-dark-400">
-                    {envStatus.openclaw_version || '未安装'}
+                    {envStatus.openclaw_version
+                      ? `${envStatus.openclaw_version} · ${getRuntimeLabel(envStatus.runtime_mode)}`
+                      : '未安装'}
                   </p>
                 </div>
               </div>

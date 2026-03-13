@@ -9,13 +9,12 @@ mod models;
 mod utils;
 
 use commands::{config, diagnostics, installer, process, service};
+use tauri::Manager;
 
 fn main() {
     // 初始化日志 - 默认显示 info 级别日志
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info")
-    ).init();
-    
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     log::info!("🦞 OpenClaw Manager 启动");
 
     tauri::Builder::default()
@@ -23,6 +22,12 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            let resource_dir = app.path().resource_dir().ok();
+            utils::platform::set_resource_dir(resource_dir.clone());
+            log::info!("[启动] 资源目录: {:?}", resource_dir);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // 服务管理
             service::get_service_status,

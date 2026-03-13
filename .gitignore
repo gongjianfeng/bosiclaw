@@ -4,6 +4,7 @@ node_modules/
 # Build outputs
 dist/
 src-tauri/target/
+.tmp/
 
 # IDE
 .vscode/
@@ -28,3 +29,6 @@ npm-debug.log*
 # Tauri
 src-tauri/target/
 src-tauri/Cargo.lock
+src-tauri/runtime/**
+!src-tauri/runtime/
+!src-tauri/runtime/README.md

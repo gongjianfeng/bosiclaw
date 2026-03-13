@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "prepare:bundled-runtime": "node scripts/prepare-bundled-runtime.mjs",
+    "verify:bundled-runtime": "node scripts/verify-bundled-runtime.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",

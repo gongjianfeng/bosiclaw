@@ -24,6 +24,8 @@ export interface EnvironmentStatus {
   config_dir_exists: boolean;
   ready: boolean;
   os: string;
+  runtime_mode: 'bundled' | 'system' | 'missing';
+  runtime_root: string | null;
 }
 
 interface ServiceStatus {
