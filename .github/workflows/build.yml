@@ -189,6 +189,14 @@ jobs:
           tar -czf openclaw-runtime.tgz -C node_modules/openclaw .
           cp openclaw-runtime.tgz "$GITHUB_WORKSPACE/src-tauri/resources/"
 
+          # 验证 tgz 内容完整性
+          echo "验证 tgz 关键文件..."
+          tar -tzf openclaw-runtime.tgz | grep -q "^./openclaw.mjs$" || tar -tzf openclaw-runtime.tgz | grep -q "^openclaw.mjs$" || { echo "ERROR: tgz 中缺少 openclaw.mjs"; exit 1; }
+          tar -tzf openclaw-runtime.tgz | grep -q "dist/entry.js" || { echo "ERROR: tgz 中缺少 dist/entry.js"; exit 1; }
+          tar -tzf openclaw-runtime.tgz | grep -q "node_modules/" || { echo "ERROR: tgz 中缺少 node_modules/"; exit 1; }
+          NODE_MODULES_COUNT=$(tar -tzf openclaw-runtime.tgz | grep "^./node_modules/[^/]*/$" | wc -l)
+          echo "  openclaw.mjs ✓ | dist/entry.js ✓ | node_modules deps: $NODE_MODULES_COUNT"
+
           cd "$GITHUB_WORKSPACE"
           rm -rf "$INSTALL_DIR"
 

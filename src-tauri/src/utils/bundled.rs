@@ -114,25 +114,41 @@ pub fn ensure_openclaw_extracted(resource_dir: &Path) -> Result<PathBuf, String>
         }
     }
 
-    // 需要解压
-    info!("[Bundled] 开始解压 openclaw runtime 到 {}", openclaw_dir.display());
+    // 需要解压（使用临时目录实现原子性，避免中途失败导致 runtime 不可用）
+    info!("[Bundled] 开始解压 openclaw runtime...");
 
     // 确保 runtime 根目录存在
     fs::create_dir_all(&runtime_dir)
         .map_err(|e| format!("创建 runtime 目录失败: {}", e))?;
 
-    // 清理旧的 openclaw 目录
+    // 先解压到临时目录
+    let tmp_dir = runtime_dir.join("_extracting");
+    if tmp_dir.exists() {
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+    fs::create_dir_all(&tmp_dir)
+        .map_err(|e| format!("创建临时解压目录失败: {}", e))?;
+
+    if let Err(e) = extract_tgz(&tgz_path, &tmp_dir) {
+        let _ = fs::remove_dir_all(&tmp_dir);
+        return Err(e);
+    }
+
+    // 验证解压结果
+    let tmp_mjs = tmp_dir.join("openclaw.mjs");
+    if !tmp_mjs.exists() {
+        let _ = fs::remove_dir_all(&tmp_dir);
+        return Err("解压完成但未找到 openclaw.mjs".to_string());
+    }
+
+    // 原子替换：删除旧目录，rename 临时目录
     if openclaw_dir.exists() {
         info!("[Bundled] 清理旧 runtime 目录...");
         fs::remove_dir_all(&openclaw_dir)
             .map_err(|e| format!("清理旧 runtime 失败: {}", e))?;
     }
-
-    fs::create_dir_all(&openclaw_dir)
-        .map_err(|e| format!("创建 openclaw 目录失败: {}", e))?;
-
-    // 解压 tgz
-    extract_tgz(&tgz_path, &openclaw_dir)?;
+    fs::rename(&tmp_dir, &openclaw_dir)
+        .map_err(|e| format!("重命名解压目录失败: {}", e))?;
 
     // 写入版本标记
     fs::write(&version_file, &bundled_version)
@@ -147,7 +163,7 @@ pub fn ensure_openclaw_extracted(resource_dir: &Path) -> Result<PathBuf, String>
         info!("[Bundled] ✓ openclaw runtime 解压完成");
         Ok(mjs_path)
     } else {
-        Err(format!("解压完成但未找到 openclaw.mjs: {}", mjs_path.display()))
+        Err("解压完成但未找到 openclaw.mjs（rename 后路径异常）".to_string())
     }
 }
 
@@ -200,8 +216,9 @@ fn extract_tgz(tgz_path: &Path, dest: &Path) -> Result<(), String> {
         let mut entry = entry.map_err(|e| format!("读取 entry 失败: {}", e))?;
 
         // 跳过 symlink（Windows 上创建 symlink 需要特殊权限，.bin/ 目录的 symlink 运行时不需要）
+        // hardlink 保留——可以安全解压为普通文件副本
         let entry_type = entry.header().entry_type();
-        if entry_type == tar::EntryType::Symlink || entry_type == tar::EntryType::Link {
+        if entry_type == tar::EntryType::Symlink {
             skipped_symlinks += 1;
             continue;
         }

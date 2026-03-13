@@ -63,7 +63,8 @@ pub fn get_extended_path() -> String {
         paths.push(current_path);
     }
     
-    paths.join(":")
+    let separator = if platform::is_windows() { ";" } else { ":" };
+    paths.join(separator)
 }
 
 /// 执行 Shell 命令（带扩展 PATH）
