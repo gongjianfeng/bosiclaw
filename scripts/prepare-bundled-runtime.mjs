@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -49,6 +50,8 @@ function run(command, args, options = {}) {
     throw new Error(
       [
         `${command} ${args.join(' ')} 执行失败`,
+        result.error ? `spawn error: ${result.error.message}` : '',
+        result.status !== null ? `exit code: ${result.status}` : '',
         result.stdout?.trim(),
         result.stderr?.trim(),
       ]
@@ -99,6 +102,25 @@ function readPackageVersion(packageRoot) {
   return packageJson.version ?? 'unknown';
 }
 
+function getDefaultStagingPrefix() {
+  if (process.platform === 'win32') {
+    return join(process.env.RUNNER_TEMP ?? process.env.TEMP ?? process.env.TMP ?? tmpdir(), 'ocrt');
+  }
+
+  return resolve(repoRoot, '.tmp', 'bundled-openclaw-runtime');
+}
+
+function getDefaultNpmCacheDir() {
+  if (process.platform === 'win32') {
+    return join(
+      process.env.RUNNER_TEMP ?? process.env.TEMP ?? process.env.TMP ?? tmpdir(),
+      'ocrt-cache'
+    );
+  }
+
+  return resolve(repoRoot, '.tmp', 'bundled-openclaw-npm-cache');
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const nodeBin = args['node-bin'] ?? process.env.BOSICLAW_NODE_BIN ?? process.execPath;
@@ -109,7 +131,11 @@ function main() {
   const stagingPrefix =
     args['staging-prefix'] ??
     process.env.OPENCLAW_STAGING_PREFIX ??
-    resolve(repoRoot, '.tmp', 'bundled-openclaw-runtime');
+    getDefaultStagingPrefix();
+  const npmCacheDir =
+    args['npm-cache-dir'] ??
+    process.env.OPENCLAW_NPM_CACHE ??
+    getDefaultNpmCacheDir();
 
   const nodeRoot = resolveNodeRoot(nodeBin);
   if (!existsSync(nodeRoot)) {
@@ -122,16 +148,23 @@ function main() {
     const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
     cleanPath(stagingPrefix);
     ensureDir(stagingPrefix);
+    ensureDir(npmCacheDir);
 
     console.log(`使用 npm 安装 openclaw@${openclawVersion} 到临时前缀: ${stagingPrefix}`);
+    if (process.platform === 'win32') {
+      console.log(`Windows CI 使用短 npm cache 目录: ${npmCacheDir}`);
+    }
     run(
       npmCommand,
       ['install', '--global', `--prefix=${stagingPrefix}`, `openclaw@${openclawVersion}`],
       {
+        stdio: 'inherit',
         env: {
           ...process.env,
           SHARP_IGNORE_GLOBAL_LIBVIPS:
             process.env.SHARP_IGNORE_GLOBAL_LIBVIPS ?? '1',
+          npm_config_cache: npmCacheDir,
+          npm_config_loglevel: process.env.OPENCLAW_NPM_LOGLEVEL ?? 'notice',
         },
       }
     );

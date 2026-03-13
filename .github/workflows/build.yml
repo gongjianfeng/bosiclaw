@@ -101,7 +101,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Prepare bundled runtime (Windows)
+        if: runner.os == 'Windows'
+        env:
+          OPENCLAW_STAGING_PREFIX: ${{ format('{0}\\ocrt', runner.temp) }}
+          OPENCLAW_NPM_CACHE: ${{ format('{0}\\ocrt-cache', runner.temp) }}
+        run: npm run prepare:bundled-runtime
+
       - name: Prepare bundled runtime
+        if: runner.os != 'Windows'
         run: npm run prepare:bundled-runtime
 
       # ── 构建 ─────────────────────────────────────────────
