@@ -1355,27 +1355,7 @@ Read-Host "按回车键关闭此窗口"
         Ok("已打开安装终端".to_string())
     } else if platform::is_macos() {
         // macOS: 打开 Terminal.app
-        let script_content = r#"#!/bin/bash
-clear
-echo "========================================"
-echo "    Node.js 安装向导"
-echo "========================================"
-echo ""
-
-echo "当前应用已改为优先使用 npmmirror 托管 Node 运行时。"
-echo "如果自动安装失败，可手动下载镜像，或在你已安装的 Homebrew 中执行："
-echo "  brew install node@22"
-echo "  brew link --overwrite node@22"
-echo ""
-echo "镜像目录: https://npmmirror.com/mirrors/node/"
-open "https://npmmirror.com/mirrors/node/" >/dev/null 2>&1 || true
-
-echo ""
-echo "如已手动安装完成，可运行 node --version 验证。"
-node --version 2>/dev/null || true
-echo ""
-read -p "按回车键关闭此窗口..."
-"#;
+        let script_content = build_macos_nodejs_install_terminal_script()?;
 
         let script_path = "/tmp/openclaw_install_nodejs.command";
         std::fs::write(script_path, script_content).map_err(|e| format!("创建脚本失败: {}", e))?;
@@ -1394,6 +1374,86 @@ read -p "按回车键关闭此窗口..."
     } else {
         Err("请手动安装 Node.js: https://nodejs.org/".to_string())
     }
+}
+
+fn build_macos_nodejs_install_terminal_script() -> Result<String, String> {
+    let paths = ManagedInstallPaths::new();
+    let url = macos_node_archive_url().ok_or_else(|| {
+        format!(
+            "当前 macOS 架构 {} 暂不支持自动下载 Node",
+            platform::get_arch()
+        )
+    })?;
+    let archive_path = paths
+        .runtime_dir
+        .join(format!("node-v{}-macos.tar.gz", MANAGED_NODE_VERSION));
+    let extract_dir = paths.runtime_dir.join("node_extract");
+    let node_bin = paths.node_dir.join("bin").join("node");
+    let npm_bin = paths.node_dir.join("bin").join("npm");
+
+    Ok(format!(
+        r#"#!/bin/bash
+set -euo pipefail
+clear
+echo "========================================"
+echo "    Node.js 安装向导"
+echo "========================================"
+echo ""
+echo "当前版本会把 Node.js 安装到应用托管目录，并优先使用 npmmirror。"
+echo "如果自动安装失败，这里会继续执行同一套托管下载逻辑。"
+echo ""
+
+RUNTIME_DIR={runtime_dir}
+NODE_DIR={node_dir}
+ARCHIVE_PATH={archive_path}
+EXTRACT_DIR={extract_dir}
+NODE_BIN={node_bin}
+NPM_BIN={npm_bin}
+NODE_URL={node_url}
+NPM_REGISTRY={npm_registry}
+
+mkdir -p "$RUNTIME_DIR"
+rm -rf "$EXTRACT_DIR"
+
+echo "下载 Node.js {managed_node_version}..."
+curl -L --fail --retry 3 --retry-delay 2 -o "$ARCHIVE_PATH" "$NODE_URL"
+
+mkdir -p "$EXTRACT_DIR"
+tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
+
+EXTRACTED_DIR="$(find "$EXTRACT_DIR" -maxdepth 1 -type d -name 'node-v*' | head -n 1)"
+if [ -z "$EXTRACTED_DIR" ]; then
+  echo ""
+  echo "未找到解压后的 Node 目录，安装失败。"
+  exit 1
+fi
+
+rm -rf "$NODE_DIR"
+mv "$EXTRACTED_DIR" "$NODE_DIR"
+rm -rf "$EXTRACT_DIR"
+
+export PATH="$NODE_DIR/bin:$PATH"
+"$NPM_BIN" config set registry "$NPM_REGISTRY" --location user >/dev/null 2>&1 || true
+
+echo ""
+echo "Node.js 安装完成。"
+echo "安装位置: $NODE_BIN"
+"$NODE_BIN" --version
+"$NPM_BIN" --version
+echo ""
+echo "请回到 OpenClaw Manager 点击“重新检查”。"
+read -p "按回车键关闭此窗口..."
+"#,
+        runtime_dir = shell_single_quote(&paths.runtime_dir.display().to_string()),
+        node_dir = shell_single_quote(&paths.node_dir.display().to_string()),
+        archive_path = shell_single_quote(&archive_path.display().to_string()),
+        extract_dir = shell_single_quote(&extract_dir.display().to_string()),
+        node_bin = shell_single_quote(&node_bin.display().to_string()),
+        npm_bin = shell_single_quote(&npm_bin.display().to_string()),
+        node_url = shell_single_quote(&url),
+        npm_registry = shell_single_quote(NPM_REGISTRY_MIRROR),
+        managed_node_version = MANAGED_NODE_VERSION,
+    ))
 }
 
 /// 打开终端安装 OpenClaw

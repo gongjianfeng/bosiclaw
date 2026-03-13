@@ -96,7 +96,7 @@ fn get_managed_path_entries() -> Vec<String> {
         ]
     } else {
         vec![
-            format!("{}/node/bin", runtime_dir),
+            format!("{}/nodejs/bin", runtime_dir),
             format!("{}/openclaw_app/node_modules/.bin", runtime_dir),
         ]
     }
@@ -107,7 +107,7 @@ pub fn get_managed_node_path() -> Option<String> {
     let candidate = if platform::is_windows() {
         format!("{}\\nodejs\\node.exe", runtime_dir)
     } else {
-        format!("{}/node/bin/node", runtime_dir)
+        format!("{}/nodejs/bin/node", runtime_dir)
     };
 
     Path::new(&candidate).exists().then_some(candidate)
@@ -118,7 +118,7 @@ pub fn get_managed_npm_path() -> Option<String> {
     let candidate = if platform::is_windows() {
         format!("{}\\nodejs\\npm.cmd", runtime_dir)
     } else {
-        format!("{}/node/bin/npm", runtime_dir)
+        format!("{}/nodejs/bin/npm", runtime_dir)
     };
 
     Path::new(&candidate).exists().then_some(candidate)
